@@ -1,0 +1,95 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* Semantic tokens; components use these roles, never raw hex. */
+:root {
+  color-scheme: light;
+  --bg: #f4f3ee;
+  --surface: #fcfcfb;
+  --surface-2: #efeee9;
+  --border: #dcdad2;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #7a7974;
+  --accent: #eb6834;
+  --accent-ink: #ffffff;
+  --series-1: #2a78d6; /* bed */
+  --series-2: #eb6834; /* hotend */
+  --good: #1a7f37;
+  --warning: #b07800;
+  --critical: #c9302c;
+  --info: #2a78d6;
+  --grid: #e6e4dd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --surface-2: #232321;
+    --border: #33322f;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --text-3: #8e8d85;
+    --accent: #e8703f;
+    --accent-ink: #ffffff;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --good: #3fb950;
+    --warning: #d29922;
+    --critical: #f05252;
+    --info: #3987e5;
+    --grid: #2a2a28;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #121211;
+  --surface: #1a1a19;
+  --surface-2: #232321;
+  --border: #33322f;
+  --text: #ffffff;
+  --text-2: #c3c2b7;
+  --text-3: #8e8d85;
+  --accent: #e8703f;
+  --accent-ink: #ffffff;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --good: #3fb950;
+  --warning: #d29922;
+  --critical: #f05252;
+  --info: #3987e5;
+  --grid: #2a2a28;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
+  --color-info: var(--info);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

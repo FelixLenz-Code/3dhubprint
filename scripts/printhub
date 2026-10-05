@@ -1,0 +1,807 @@
+#!/usr/bin/env bash
+# PrintHub management CLI: install, update (with backup + automatic rollback), backup/restore.
+# Installed to /usr/local/bin/printhub by install.sh. Run `printhub help` for usage.
+set -Eeuo pipefail
+
+GITHUB_REPO="FelixLenz-Code/3dhubprint"
+IMAGE_REPO="ghcr.io/felixlenz-code/3dhubprint"
+CLI_VERSION="1"
+
+PRINTHUB_DIR="${PRINTHUB_DIR:-/opt/printhub}"
+CONF_FILE="$PRINTHUB_DIR/printhub.conf"
+ENV_FILE="$PRINTHUB_DIR/.env"
+COMPOSE_FILE="$PRINTHUB_DIR/compose.yml"
+STATE_FILE="$PRINTHUB_DIR/.state"
+DATA_DIR="$PRINTHUB_DIR/data"
+BACKUP_DIR="$PRINTHUB_DIR/backups"
+SRC_DIR="$PRINTHUB_DIR/src"
+LOG_FILE="$PRINTHUB_DIR/printhub.log"
+CONTAINER="printhub"
+CLI_PATH="/usr/local/bin/printhub"
+HEALTH_TIMEOUT=120
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+if [[ -t 1 ]]; then
+  C_RESET=$'\e[0m' C_BOLD=$'\e[1m' C_RED=$'\e[31m' C_GREEN=$'\e[32m' C_YELLOW=$'\e[33m' C_BLUE=$'\e[34m'
+else
+  C_RESET="" C_BOLD="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE=""
+fi
+
+log() {
+  # Also append to the log file once the install dir exists.
+  if [[ -d "$PRINTHUB_DIR" && -w "$PRINTHUB_DIR" ]]; then
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE" 2>/dev/null || true
+  fi
+}
+info() { printf '%s==>%s %s\n' "$C_BLUE" "$C_RESET" "$*"; log "INFO $*"; }
+ok() { printf '%s✓%s %s\n' "$C_GREEN" "$C_RESET" "$*"; log "OK   $*"; }
+warn() { printf '%s!%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; log "WARN $*"; }
+die() {
+  printf '%s✗ %s%s\n' "$C_RED" "$*" "$C_RESET" >&2
+  log "FAIL $*"
+  exit 1
+}
+
+on_error() {
+  local code=$? line=$1
+  printf '%s✗ Unerwarteter Fehler (Exit %s, Zeile %s). Details: %s%s\n' "$C_RED" "$code" "$line" "$LOG_FILE" "$C_RESET" >&2
+  log "FAIL unexpected error exit=$code line=$line cmd=${BASH_COMMAND}"
+}
+trap 'on_error $LINENO' ERR
+
+INTERACTIVE=1
+[[ -r /dev/tty ]] || INTERACTIVE=0
+
+# ask VAR "Question" "default"  -- reads from the terminal even when piped through curl | bash.
+ask() {
+  local __var=$1 question=$2 default=${3:-} answer=""
+  if [[ $INTERACTIVE -eq 1 ]]; then
+    if [[ -n "$default" ]]; then
+      read -r -p "$question [$default]: " answer </dev/tty || true
+    else
+      read -r -p "$question: " answer </dev/tty || true
+    fi
+  fi
+  printf -v "$__var" '%s' "${answer:-$default}"
+}
+
+# confirm "Question" y|n  -> returns 0 for yes
+confirm() {
+  local question=$1 default=${2:-n} answer=""
+  if [[ $INTERACTIVE -eq 0 ]]; then
+    [[ $default == y ]]
+    return
+  fi
+  local hint="[j/N]"
+  [[ $default == y ]] && hint="[J/n]"
+  read -r -p "$question $hint " answer </dev/tty || true
+  answer=${answer:-$default}
+  [[ $answer =~ ^[jJyY] ]]
+}
+
+need_root() {
+  [[ $EUID -eq 0 ]] || die "Dieser Befehl braucht Root-Rechte. Bitte mit sudo ausführen."
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Serialize all state-changing commands (manual update vs. timer).
+acquire_lock() {
+  mkdir -p "$PRINTHUB_DIR"
+  exec 9>"$PRINTHUB_DIR/.lock"
+  if ! flock -n 9; then
+    die "Ein anderer PrintHub-Vorgang läuft gerade (Update/Backup). Bitte später erneut versuchen."
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Config / state
+# ---------------------------------------------------------------------------
+
+# Defaults, overridden by printhub.conf and then by command-line flags.
+CHANNEL="stable" # stable = releases, edge = latest main branch
+PORT="8080"
+MODE="image" # image = prebuilt from ghcr.io, source = build locally from git
+KEEP_BACKUPS="5"
+PINNED_VERSION=""
+
+load_conf() {
+  if [[ -f "$CONF_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONF_FILE"
+  fi
+}
+
+save_conf() {
+  cat >"$CONF_FILE" <<EOF
+# PrintHub-Installationseinstellungen (von 'printhub' verwaltet)
+CHANNEL="$CHANNEL"
+PORT="$PORT"
+MODE="$MODE"
+KEEP_BACKUPS="$KEEP_BACKUPS"
+PINNED_VERSION="$PINNED_VERSION"
+EOF
+}
+
+state_get() {
+  [[ -f "$STATE_FILE" ]] || return 0
+  grep -E "^$1=" "$STATE_FILE" | tail -n1 | cut -d= -f2- || true
+}
+
+state_set() {
+  local key=$1 value=$2 tmp
+  tmp=$(mktemp "$PRINTHUB_DIR/.state.XXXXXX")
+  if [[ -f "$STATE_FILE" ]]; then grep -vE "^$key=" "$STATE_FILE" >"$tmp" || true; fi
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+env_get() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2- || true
+}
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+
+compose() { docker compose -f "$COMPOSE_FILE" --project-name printhub "$@"; }
+
+ensure_docker() {
+  if have docker && docker compose version >/dev/null 2>&1; then
+    docker info >/dev/null 2>&1 || die "Docker ist installiert, aber nicht erreichbar (läuft der Dienst? Rechte?)."
+    return
+  fi
+  need_root
+  # shellcheck source=/dev/null
+  source /etc/os-release
+  case "${ID:-}" in
+    debian | ubuntu | raspbian) ;;
+    *) die "Automatische Docker-Installation wird nur für Debian/Ubuntu unterstützt. Bitte Docker + Compose-Plugin manuell installieren: https://docs.docker.com/engine/install/" ;;
+  esac
+  local distro=$ID
+  [[ $distro == raspbian ]] && distro=debian
+  info "Installiere Docker (offizielles Docker-Repository für $distro ${VERSION_CODENAME:-})…"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq ca-certificates curl gnupg >/dev/null
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/$distro/gpg" -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$distro ${VERSION_CODENAME} stable" \
+    >/etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
+  systemctl enable --now docker >/dev/null 2>&1 || true
+  docker compose version >/dev/null 2>&1 || die "Docker-Installation fehlgeschlagen."
+  ok "Docker installiert: $(docker --version)"
+}
+
+container_health() {
+  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || echo "missing"
+}
+
+wait_healthy() {
+  local deadline=$((SECONDS + HEALTH_TIMEOUT)) status
+  info "Warte auf Start der Anwendung (max. ${HEALTH_TIMEOUT}s)…"
+  while ((SECONDS < deadline)); do
+    status=$(container_health)
+    case "$status" in
+      healthy) return 0 ;;
+      unhealthy | exited | dead | missing)
+        # 'unhealthy' can be transient during start; only give up on a stopped container.
+        if [[ $status != unhealthy ]]; then return 1; fi
+        ;;
+    esac
+    sleep 3
+  done
+  return 1
+}
+
+running_version() {
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
+}
+
+write_compose() {
+  local image=$1
+  cat >"$COMPOSE_FILE" <<EOF
+# Von 'printhub' erzeugt, wird bei Updates überschrieben. Eigene Einstellungen gehören in .env.
+services:
+  printhub:
+    image: $image
+    container_name: $CONTAINER
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: "8080"
+    ports:
+      - "$PORT:8080"
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Versions
+# ---------------------------------------------------------------------------
+
+latest_release() {
+  local tag
+  tag=$(curl -fsSL --max-time 15 "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null |
+    sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1) || true
+  if [[ -z "$tag" ]] && have git; then
+    tag=$(git ls-remote --tags --refs "https://github.com/$GITHUB_REPO.git" 'v*' 2>/dev/null |
+      sed 's|.*refs/tags/||' | sort -V | tail -n1) || true
+  fi
+  printf '%s' "$tag"
+}
+
+# Prints "<image-tag> <git-ref>" for the requested target.
+resolve_target() {
+  local want=${1:-}
+  if [[ -n "$want" ]]; then
+    want=${want#v}
+    printf '%s v%s' "$want" "$want"
+  elif [[ -n "$PINNED_VERSION" ]]; then
+    printf '%s v%s' "${PINNED_VERSION#v}" "${PINNED_VERSION#v}"
+  elif [[ $CHANNEL == edge ]]; then
+    printf 'edge main'
+  else
+    local tag
+    tag=$(latest_release)
+    if [[ -z "$tag" ]]; then
+      warn "Kein Release gefunden, verwende den Entwicklungsstand (edge)."
+      printf 'edge main'
+    else
+      printf '%s %s' "${tag#v}" "$tag"
+    fi
+  fi
+}
+
+# Pulls (or builds) the target and prints a pinned image reference.
+obtain_image() {
+  local tag=$1 ref=$2
+  if [[ $MODE == image ]]; then
+    info "Lade Image $IMAGE_REPO:$tag…" >&2
+    if docker pull -q "$IMAGE_REPO:$tag" >/dev/null 2>&1; then
+      local digest
+      digest=$(docker image inspect -f '{{index .RepoDigests 0}}' "$IMAGE_REPO:$tag" 2>/dev/null || true)
+      printf '%s' "${digest:-$IMAGE_REPO:$tag}"
+      return 0
+    fi
+    warn "Image konnte nicht geladen werden, baue stattdessen aus dem Quellcode." >&2
+  fi
+  build_from_source "$ref"
+}
+
+build_from_source() {
+  local ref=$1
+  have git || {
+    if [[ $EUID -eq 0 ]] && have apt-get; then
+      apt-get install -y -qq git >/dev/null
+    else
+      die "git wird für den Build aus dem Quellcode benötigt."
+    fi
+  }
+  info "Baue PrintHub ($ref) aus dem Quellcode, das dauert einige Minuten…" >&2
+  if [[ -d "$SRC_DIR/.git" ]]; then
+    git -C "$SRC_DIR" fetch --quiet --tags --force origin >&2
+  else
+    git clone --quiet "https://github.com/$GITHUB_REPO.git" "$SRC_DIR" >&2
+  fi
+  git -C "$SRC_DIR" checkout --quiet --force "$ref" >&2
+  [[ $ref == main ]] && git -C "$SRC_DIR" reset --quiet --hard origin/main >&2
+  local version sha
+  sha=$(git -C "$SRC_DIR" rev-parse --short HEAD)
+  version=${ref#v}
+  [[ $ref == main ]] && version="edge-$sha"
+  docker build --quiet --build-arg "APP_VERSION=$version" -t "printhub-local:$sha" "$SRC_DIR" >&2 ||
+    die "Build aus dem Quellcode fehlgeschlagen."
+  printf 'printhub-local:%s' "$sha"
+}
+
+# ---------------------------------------------------------------------------
+# Backup / restore
+# ---------------------------------------------------------------------------
+
+create_backup() {
+  local label=${1:-manual} file was_running=0
+  mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
+  file="$BACKUP_DIR/printhub-$(date +%Y%m%d-%H%M%S)-$label.tar.gz"
+  # Stop briefly so the SQLite database (WAL) is consistent on disk.
+  if [[ $(container_health) != missing ]] && docker ps -q -f "name=^${CONTAINER}$" | grep -q .; then
+    was_running=1
+    compose stop >/dev/null 2>&1 || true
+  fi
+  tar -czf "$file" -C "$PRINTHUB_DIR" data .env printhub.conf
+  chmod 600 "$file"
+  if ((was_running)); then compose start >/dev/null 2>&1 || true; fi
+  prune_backups
+  printf '%s' "$file"
+}
+
+prune_backups() {
+  local keep=${KEEP_BACKUPS:-5}
+  find "$BACKUP_DIR" -maxdepth 1 -name 'printhub-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2- | xargs -r rm -f
+}
+
+restore_backup_files() {
+  local file=$1
+  [[ -f "$file" ]] || die "Backup nicht gefunden: $file"
+  tar -tzf "$file" >/dev/null 2>&1 || die "Backup-Datei ist beschädigt: $file"
+  compose down >/dev/null 2>&1 || true
+  local aside
+  aside="$PRINTHUB_DIR/data.before-restore-$(date +%Y%m%d-%H%M%S)"
+  [[ -d "$DATA_DIR" ]] && mv "$DATA_DIR" "$aside"
+  tar -xzf "$file" -C "$PRINTHUB_DIR"
+  chown -R 1000:1000 "$DATA_DIR" 2>/dev/null || true
+  rm -rf "$aside"
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_install() {
+  local version="" public_url="${PRINTHUB_PUBLIC_URL:-}" proxies="${PRINTHUB_TRUSTED_PROXIES:-}" auto_update=""
+  load_conf
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --channel) CHANNEL=$2; shift 2 ;;
+      --version) version=$2; shift 2 ;;
+      --port) PORT=$2; shift 2 ;;
+      --source) MODE=source; shift ;;
+      --public-url) public_url=$2; shift 2 ;;
+      --trusted-proxies) proxies=$2; shift 2 ;;
+      --auto-update) auto_update=y; shift ;;
+      --no-auto-update) auto_update=n; shift ;;
+      -y | --yes) INTERACTIVE=0; shift ;;
+      *) die "Unbekannte Option: $1" ;;
+    esac
+  done
+  [[ $CHANNEL == stable || $CHANNEL == edge ]] || die "--channel muss 'stable' oder 'edge' sein."
+  [[ $PORT =~ ^[0-9]+$ ]] || die "--port muss eine Zahl sein."
+
+  printf '\n%sPrintHub Installation%s\n\n' "$C_BOLD" "$C_RESET"
+  preflight
+
+  ensure_docker
+  mkdir -p "$PRINTHUB_DIR" "$DATA_DIR"
+  chmod 750 "$PRINTHUB_DIR"
+  acquire_lock
+
+  if [[ -f "$ENV_FILE" ]]; then
+    ok "Bestehende Installation gefunden, Konfiguration bleibt erhalten."
+  else
+    configure_env "$public_url" "$proxies"
+  fi
+  chown -R 1000:1000 "$DATA_DIR"
+  save_conf
+
+  local target tag ref image
+  target=$(resolve_target "$version")
+  tag=${target% *} ref=${target#* }
+  image=$(obtain_image "$tag" "$ref")
+  write_compose "$image"
+  info "Starte PrintHub…"
+  compose up -d --remove-orphans >/dev/null
+  if ! wait_healthy; then
+    compose logs --tail 50 >&2 || true
+    die "PrintHub ist nicht gestartet. Logs siehe oben bzw. 'printhub logs'."
+  fi
+  state_set current_image "$image"
+  state_set installed_at "$(date -Iseconds)"
+  ok "PrintHub $(running_version) läuft."
+
+  if [[ $EUID -eq 0 ]]; then
+    if [[ -z "$auto_update" ]]; then
+      if confirm "Automatische Updates aktivieren (täglich nachts, mit Backup und Rollback)?" n; then auto_update=y; else auto_update=n; fi
+    fi
+    if [[ $auto_update == y ]]; then cmd_auto_update on; fi
+  fi
+
+  print_summary
+}
+
+preflight() {
+  [[ $(uname -s) == Linux ]] || die "PrintHub läuft nur unter Linux."
+  have curl || die "curl wird benötigt."
+  have flock || die "flock (util-linux) wird benötigt."
+  local arch
+  arch=$(uname -m)
+  if [[ $arch != x86_64 && $MODE == image ]]; then
+    warn "Für $arch gibt es kein fertiges Image, PrintHub wird aus dem Quellcode gebaut."
+    MODE=source
+  fi
+  local mem_mb disk_mb
+  mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  ((mem_mb >= 900)) || warn "Nur ${mem_mb} MB RAM. Empfohlen sind mindestens 2 GB (6–8 GB fürs Slicen)."
+  mkdir -p "$PRINTHUB_DIR"
+  disk_mb=$(df -Pm "$PRINTHUB_DIR" | awk 'NR==2 {print $4}')
+  ((disk_mb >= 3000)) || die "Zu wenig freier Speicher in $PRINTHUB_DIR (${disk_mb} MB, mindestens 3 GB nötig)."
+  if [[ $(container_health) == missing ]] && have ss && ss -ltn "sport = :$PORT" | grep -q LISTEN; then
+    die "Port $PORT ist bereits belegt. Anderen Port wählen: --port 8081"
+  fi
+}
+
+configure_env() {
+  local public_url=$1 proxies=$2 cookie_secure secret
+  info "Konfiguration"
+  if [[ -z "$public_url" ]]; then
+    ask public_url "Öffentliche Adresse (über deinen nginx), z. B. https://drucker.example.de (leer = nur LAN)" ""
+  fi
+  if [[ -n "$public_url" && -z "$proxies" ]]; then
+    ask proxies "IP-Adresse(n) des nginx-Reverse-Proxys (kommagetrennt)" ""
+  fi
+  if [[ -n "$public_url" && ! $public_url =~ ^https?:// ]]; then public_url="https://$public_url"; fi
+  public_url=${public_url%/}
+
+  cookie_secure=false
+  if [[ $public_url == https://* ]]; then
+    cookie_secure=true
+    if confirm "Anmeldung auch direkt per http://<server-ip>:$PORT im LAN erlauben? (weniger sicher)" n; then cookie_secure=false; fi
+  fi
+
+  secret=$(head -c 48 /dev/urandom | base64 | tr -d '\n')
+  umask 077
+  cat >"$ENV_FILE" <<EOF
+# PrintHub-Konfiguration. Nach Änderungen: printhub restart
+#
+# Verschlüsselt gespeicherte Geheimnisse (Drucker-API-Keys, 2FA). NICHT ändern,
+# sonst sind diese Daten unlesbar. Wird bei 'printhub backup' mitgesichert.
+APP_SECRET=$secret
+
+# Öffentliche Adresse hinter dem Reverse-Proxy (leer = nur LAN)
+PUBLIC_URL=$public_url
+
+# IP(s) des Reverse-Proxys, dessen X-Forwarded-* Header vertraut wird
+TRUSTED_PROXIES=$proxies
+
+# true = Login nur über HTTPS (empfohlen hinter nginx)
+COOKIE_SECURE=$cookie_secure
+
+LOG_LEVEL=info
+EOF
+  umask 022
+  ok "Konfiguration in $ENV_FILE angelegt."
+}
+
+print_summary() {
+  local ip public_url
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  public_url=$(env_get PUBLIC_URL)
+  printf '\n%sFertig!%s\n\n' "$C_GREEN$C_BOLD" "$C_RESET"
+  if [[ -n "$public_url" ]]; then
+    printf '  Adresse:      %s\n' "$public_url"
+    printf '  Intern:       http://%s:%s  (Ziel für deinen nginx)\n' "${ip:-<server-ip>}" "$PORT"
+  else
+    printf '  Adresse:      http://%s:%s\n' "${ip:-<server-ip>}" "$PORT"
+  fi
+  printf '  Installation: %s\n\n' "$PRINTHUB_DIR"
+  printf 'Nächste Schritte:\n'
+  printf '  1. Adresse öffnen und das Admin-Konto anlegen, danach 2FA aktivieren.\n'
+  printf '  2. In der moonraker.conf jedes Druckers unter [authorization] trusted_clients\n'
+  printf '     die IP dieses Servers (%s) eintragen, oder in PrintHub einen API-Key hinterlegen.\n' "${ip:-<server-ip>}"
+  [[ -n "$public_url" ]] && printf '  3. nginx-Konfiguration: https://github.com/%s#nginx-auf-dem-reverse-proxy-server\n' "$GITHUB_REPO"
+  printf '\nVerwaltung: %sprinthub help%s\n\n' "$C_BOLD" "$C_RESET"
+}
+
+cmd_update() {
+  local version="" self_update=1 auto=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --version) version=$2; shift 2 ;;
+      --no-self-update) self_update=0; shift ;;
+      --auto) auto=1; INTERACTIVE=0; shift ;;
+      -y | --yes) INTERACTIVE=0; shift ;;
+      *) die "Unbekannte Option: $1" ;;
+    esac
+  done
+  require_installed
+  load_conf
+
+  local target tag ref
+  target=$(resolve_target "$version")
+  tag=${target% *} ref=${target#* }
+
+  # Update this script first so the update logic matches the target version.
+  if ((self_update)) && [[ $EUID -eq 0 && -w "$CLI_PATH" ]]; then
+    if self_update_cli "$ref"; then
+      local args=(update --no-self-update)
+      [[ -n "$version" ]] && args+=(--version "$version")
+      ((auto)) && args+=(--auto)
+      exec "$CLI_PATH" "${args[@]}"
+    fi
+  fi
+
+  acquire_lock
+  local current
+  current=$(state_get current_image)
+  info "Aktuell: $(running_version || true) ($current)"
+
+  local image
+  image=$(obtain_image "$tag" "$ref")
+  if [[ "$image" == "$current" && $(container_health) == healthy ]]; then
+    ok "PrintHub ist bereits aktuell ($(running_version))."
+    return 0
+  fi
+
+  info "Sichere Daten vor dem Update…"
+  local backup
+  backup=$(create_backup "pre-update")
+  ok "Backup: $backup"
+
+  write_compose "$image"
+  compose up -d --remove-orphans >/dev/null
+  if wait_healthy; then
+    state_set current_image "$image"
+    state_set previous_image "$current"
+    state_set last_backup "$backup"
+    state_set updated_at "$(date -Iseconds)"
+    docker image prune -f >/dev/null 2>&1 || true
+    ok "Update erfolgreich: PrintHub $(running_version)."
+    return 0
+  fi
+
+  warn "Neue Version startet nicht, rolle zurück…"
+  compose logs --tail 40 >>"$LOG_FILE" 2>&1 || true
+  rollback_to "$current" "$backup"
+  die "Update fehlgeschlagen, alte Version wiederhergestellt. Details: $LOG_FILE"
+}
+
+rollback_to() {
+  local image=$1 backup=$2
+  [[ -n "$image" ]] || die "Keine vorherige Version bekannt, Rollback nicht möglich. Backup: $backup"
+  # The new version may already have migrated the database, so restore the data too.
+  restore_backup_files "$backup"
+  write_compose "$image"
+  compose up -d --remove-orphans >/dev/null
+  if wait_healthy; then
+    state_set current_image "$image"
+    ok "Zurückgerollt auf $(running_version)."
+  else
+    die "Auch die vorherige Version startet nicht. Bitte 'printhub logs' prüfen. Backup: $backup"
+  fi
+}
+
+cmd_rollback() {
+  require_installed
+  load_conf
+  acquire_lock
+  local prev backup
+  prev=$(state_get previous_image)
+  backup=$(state_get last_backup)
+  [[ -n "$prev" && -n "$backup" ]] || die "Kein vorheriges Update zum Zurückrollen gefunden."
+  confirm "Auf die Version vor dem letzten Update zurückkehren? Daten seit dem Update gehen verloren." n ||
+    die "Abgebrochen."
+  local current
+  current=$(state_get current_image)
+  rollback_to "$prev" "$backup"
+  state_set previous_image "$current"
+}
+
+self_update_cli() {
+  local ref=$1 tmp
+  tmp=$(mktemp)
+  if ! curl -fsSL --max-time 30 "https://raw.githubusercontent.com/$GITHUB_REPO/$ref/scripts/printhub" -o "$tmp"; then
+    rm -f "$tmp"
+    warn "Konnte Verwaltungsskript nicht aktualisieren, fahre mit der installierten Version fort."
+    return 1
+  fi
+  if ! bash -n "$tmp" || ! head -n1 "$tmp" | grep -q '^#!/usr/bin/env bash'; then
+    rm -f "$tmp"
+    warn "Heruntergeladenes Verwaltungsskript ist ungültig, wird ignoriert."
+    return 1
+  fi
+  if cmp -s "$tmp" "$CLI_PATH"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  install -m 0755 "$tmp" "$CLI_PATH"
+  rm -f "$tmp"
+  info "Verwaltungsskript aktualisiert."
+  return 0
+}
+
+cmd_status() {
+  require_installed
+  load_conf
+  local health version
+  health=$(container_health)
+  version=$(running_version || true)
+  printf '%sPrintHub%s\n' "$C_BOLD" "$C_RESET"
+  printf '  Status:        %s\n' "$health"
+  printf '  Version:       %s\n' "${version:-unbekannt}"
+  printf '  Kanal:         %s%s\n' "$CHANNEL" "${PINNED_VERSION:+ (fest: $PINNED_VERSION)}"
+  printf '  Image:         %s\n' "$(state_get current_image)"
+  printf '  Port:          %s\n' "$PORT"
+  printf '  Verzeichnis:   %s\n' "$PRINTHUB_DIR"
+  printf '  Letztes Update: %s\n' "$(state_get updated_at || true)"
+  if systemctl is-enabled printhub-update.timer >/dev/null 2>&1; then
+    printf '  Auto-Update:   an (%s)\n' "$(systemctl show printhub-update.timer -p NextElapseUSecRealtime --value 2>/dev/null)"
+  else
+    printf '  Auto-Update:   aus\n'
+  fi
+  if [[ $CHANNEL == stable && -z $PINNED_VERSION ]]; then
+    local latest
+    latest=$(latest_release)
+    if [[ -n "$latest" && -n "$version" && "${latest#v}" != "$version" ]]; then
+      printf '  %sUpdate verfügbar: %s → printhub update%s\n' "$C_YELLOW" "$latest" "$C_RESET"
+    fi
+  fi
+}
+
+cmd_backup() {
+  require_installed
+  load_conf
+  acquire_lock
+  local file
+  file=$(create_backup manual)
+  ok "Backup erstellt: $file"
+}
+
+cmd_restore() {
+  require_installed
+  load_conf
+  local file=${1:-}
+  if [[ -z "$file" ]]; then
+    printf 'Verfügbare Backups:\n'
+    find "$BACKUP_DIR" -maxdepth 1 -name 'printhub-*.tar.gz' -printf '  %p\n' 2>/dev/null | sort -r
+    printf '\nVerwendung: printhub restore <datei>\n'
+    return 0
+  fi
+  acquire_lock
+  confirm "Daten aus $file wiederherstellen? Der aktuelle Stand wird überschrieben." n || die "Abgebrochen."
+  local safety
+  safety=$(create_backup before-restore)
+  info "Sicherheitskopie des aktuellen Stands: $safety"
+  restore_backup_files "$file"
+  compose up -d >/dev/null
+  wait_healthy || die "PrintHub startet nach der Wiederherstellung nicht. Sicherheitskopie: $safety"
+  ok "Wiederhergestellt."
+}
+
+cmd_channel() {
+  require_installed
+  load_conf
+  case "${1:-}" in
+    stable | edge) CHANNEL=$1 PINNED_VERSION="" ;;
+    pin) [[ -n "${2:-}" ]] || die "Verwendung: printhub channel pin <version>"; PINNED_VERSION=${2#v} ;;
+    *) die "Verwendung: printhub channel stable|edge|pin <version>" ;;
+  esac
+  save_conf
+  ok "Kanal: $CHANNEL${PINNED_VERSION:+, fest auf $PINNED_VERSION}. Mit 'printhub update' anwenden."
+}
+
+cmd_auto_update() {
+  need_root
+  case "${1:-}" in
+    on)
+      cat >/etc/systemd/system/printhub-update.service <<EOF
+[Unit]
+Description=PrintHub automatisches Update
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+Environment=PRINTHUB_DIR=$PRINTHUB_DIR
+ExecStart=$CLI_PATH update --auto
+EOF
+      cat >/etc/systemd/system/printhub-update.timer <<'EOF'
+[Unit]
+Description=PrintHub automatisches Update (täglich)
+
+[Timer]
+OnCalendar=*-*-* 04:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+      systemctl daemon-reload
+      systemctl enable --now printhub-update.timer >/dev/null
+      ok "Automatische Updates aktiviert (täglich 4–5 Uhr)."
+      ;;
+    off)
+      systemctl disable --now printhub-update.timer >/dev/null 2>&1 || true
+      rm -f /etc/systemd/system/printhub-update.{service,timer}
+      systemctl daemon-reload
+      ok "Automatische Updates deaktiviert."
+      ;;
+    *) die "Verwendung: printhub auto-update on|off" ;;
+  esac
+}
+
+cmd_uninstall() {
+  need_root
+  require_installed
+  load_conf
+  confirm "PrintHub wirklich entfernen?" n || die "Abgebrochen."
+  local keep_data=y
+  confirm "Daten und Backups in $PRINTHUB_DIR behalten?" y || keep_data=n
+  compose down --rmi all >/dev/null 2>&1 || true
+  systemctl disable --now printhub-update.timer >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/printhub-update.{service,timer}
+  systemctl daemon-reload 2>/dev/null || true
+  if [[ $keep_data == n ]]; then
+    rm -rf "$PRINTHUB_DIR"
+  else
+    rm -f "$COMPOSE_FILE"
+    ok "Daten bleiben in $PRINTHUB_DIR erhalten."
+  fi
+  rm -f "$CLI_PATH"
+  ok "PrintHub entfernt. Docker selbst bleibt installiert."
+}
+
+require_installed() {
+  [[ -f "$ENV_FILE" && -f "$COMPOSE_FILE" ]] || die "Keine PrintHub-Installation in $PRINTHUB_DIR gefunden."
+}
+
+usage() {
+  cat <<EOF
+PrintHub-Verwaltung (CLI v$CLI_VERSION)
+
+Verwendung: printhub <befehl> [optionen]
+
+  status                  Zustand, Version, verfügbare Updates
+  update [--version X]    Auf neueste (oder bestimmte) Version aktualisieren
+                          (mit Backup vorher und automatischem Rollback)
+  rollback                Letztes Update rückgängig machen
+  logs [-f]               Anwendungs-Logs anzeigen
+  restart | stop | start  Dienst steuern
+  backup                  Backup von Daten und Konfiguration erstellen
+  restore [datei]         Backup wiederherstellen (ohne Datei: Liste)
+  channel stable|edge     Update-Kanal: Releases oder Entwicklungsstand
+  channel pin <version>   Auf eine Version festsetzen
+  auto-update on|off      Tägliche automatische Updates
+  config                  Konfiguration (.env) bearbeiten und neu starten
+  install [optionen]      (Neu-)Installation, siehe install.sh
+  uninstall               PrintHub entfernen
+
+Installationsverzeichnis: $PRINTHUB_DIR
+EOF
+}
+
+main() {
+  local cmd=${1:-help}
+  shift || true
+  case "$cmd" in
+    install) cmd_install "$@" ;;
+    update | upgrade) cmd_update "$@" ;;
+    rollback) cmd_rollback ;;
+    status) cmd_status ;;
+    logs) require_installed; compose logs --tail 200 "$@" ;;
+    restart) require_installed; load_conf; compose up -d --force-recreate >/dev/null && wait_healthy && ok "Neu gestartet." ;;
+    stop) require_installed; compose stop && ok "Gestoppt." ;;
+    start) require_installed; load_conf; compose up -d >/dev/null && wait_healthy && ok "Gestartet." ;;
+    backup) cmd_backup ;;
+    restore) cmd_restore "$@" ;;
+    channel) cmd_channel "$@" ;;
+    auto-update) cmd_auto_update "$@" ;;
+    config)
+      require_installed
+      load_conf
+      "${EDITOR:-nano}" "$ENV_FILE"
+      confirm "PrintHub jetzt mit der neuen Konfiguration neu starten?" y &&
+        compose up -d --force-recreate >/dev/null && wait_healthy && ok "Neu gestartet."
+      ;;
+    version | --version) printf 'CLI v%s, PrintHub %s\n' "$CLI_VERSION" "$(load_conf; running_version || echo '?')" ;;
+    help | -h | --help) usage ;;
+    *) usage; exit 1 ;;
+  esac
+}
+
+main "$@"

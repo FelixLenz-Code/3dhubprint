@@ -1,0 +1,21 @@
+{
+	"activate_air_filtration": [
+		"1"
+	],
+	"additional_cooling_fan_speed": [
+		"10"
+	],
+	"compatible_printers": [
+		"Creality K1 (0.4 nozzle)"
+	],
+	"filament_extruder_variant": [
+		"Direct Drive Standard"
+	],
+	"filament_settings_id": [
+		"Generic PLA K1"
+	],
+	"from": "User",
+	"inherits": "Generic PLA @System",
+	"name": "Generic PLA K1",
+	"version": "2.4.0.3"
+}

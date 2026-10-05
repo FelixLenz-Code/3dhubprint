@@ -1,0 +1,15 @@
+{
+	"from": "User",
+	"inherits": "Creality K1 (0.4 nozzle)",
+	"name": "Creality K1 (0.4 nozzle) - Copy",
+	"print_host": "",
+	"printer_extruder_id": [
+		"1"
+	],
+	"printer_extruder_variant": [
+		"Direct Drive Standard"
+	],
+	"printer_settings_id": "Creality K1 (0.4 nozzle) - Copy",
+	"printhost_apikey": "",
+	"version": "2.3.2.75"
+}

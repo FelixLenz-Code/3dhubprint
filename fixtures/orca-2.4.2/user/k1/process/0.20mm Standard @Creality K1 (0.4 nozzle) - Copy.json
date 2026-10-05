@@ -1,0 +1,16 @@
+{
+	"brim_type": "no_brim",
+	"from": "User",
+	"inherits": "0.20mm Standard @Creality K1 (0.4 nozzle)",
+	"name": "0.20mm Standard @Creality K1 (0.4 nozzle) - Copy",
+	"print_extruder_id": [
+		"1"
+	],
+	"print_extruder_variant": [
+		"Direct Drive Standard"
+	],
+	"print_settings_id": "0.20mm Standard @Creality K1 (0.4 nozzle) - Copy",
+	"skirt_loops": "5",
+	"top_shell_layers": "3",
+	"version": "2.3.2.75"
+}

@@ -1,0 +1,28 @@
+{
+    "enable_pressure_advance": [
+        "1"
+    ],
+    "filament_settings_id": [
+        "Tuned (Claude) - PETG"
+    ],
+    "from": "User",
+    "hot_plate_temp": [
+        "70"
+    ],
+    "hot_plate_temp_initial_layer": [
+        "75"
+    ],
+    "inherits": "Creality Generic PETG",
+    "is_custom_defined": "0",
+    "name": "Tuned (Claude) - PETG",
+    "nozzle_temperature": [
+        "242"
+    ],
+    "nozzle_temperature_initial_layer": [
+        "249"
+    ],
+    "pressure_advance": [
+        "0.19"
+    ],
+    "version": "2.3.0.3"
+}

@@ -1,0 +1,14 @@
+services:
+  printhub:
+    build: .
+    image: printhub:latest
+    container_name: printhub
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: 8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data

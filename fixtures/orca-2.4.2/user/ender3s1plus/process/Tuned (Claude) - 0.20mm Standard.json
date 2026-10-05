@@ -1,0 +1,39 @@
+{
+	"bottom_shell_layers": "3",
+	"brim_type": "no_brim",
+	"brim_width": "10",
+	"default_acceleration": "2500",
+	"enable_arc_fitting": "1",
+	"exclude_object": "1",
+	"from": "User",
+	"gap_infill_speed": "100",
+	"inherits": "0.20mm Standard @Creality Ender3S1Plus 0.4",
+	"initial_layer_acceleration": "500",
+	"initial_layer_infill_speed": "80",
+	"initial_layer_speed": "50",
+	"inner_wall_acceleration": "2000",
+	"inner_wall_speed": "150",
+	"internal_solid_infill_speed": "150",
+	"name": "Tuned (Claude) - 0.20mm Standard",
+	"outer_wall_acceleration": "1000",
+	"outer_wall_speed": "120",
+	"print_extruder_id": [
+		"1"
+	],
+	"print_extruder_variant": [
+		"Direct Drive Standard"
+	],
+	"print_settings_id": "Tuned (Claude) - 0.20mm Standard",
+	"reduce_crossing_wall": "1",
+	"skirt_loops": "5",
+	"sparse_infill_density": "10%",
+	"sparse_infill_pattern": "grid",
+	"sparse_infill_speed": "150",
+	"support_speed": "150",
+	"top_shell_layers": "3",
+	"top_surface_acceleration": "1000",
+	"top_surface_speed": "100",
+	"travel_acceleration": "2500",
+	"travel_speed": "300",
+	"version": "2.3.0.3"
+}

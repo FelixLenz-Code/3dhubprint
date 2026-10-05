@@ -1,0 +1,46 @@
+import { z } from 'zod';
+import path from 'node:path';
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  HOST: z.string().default('0.0.0.0'),
+  PORT: z.coerce.number().int().positive().default(8080),
+  DATA_DIR: z.string().default('./data'),
+  /**
+   * 32+ chars. Used to encrypt stored secrets (printer API keys, TOTP secrets).
+   * Changing it makes those secrets unreadable.
+   */
+  APP_SECRET: z.string().min(32, 'APP_SECRET muss mindestens 32 Zeichen lang sein'),
+  /**
+   * Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-* headers are trusted,
+   * e.g. "192.168.1.5". Empty = trust none.
+   */
+  TRUSTED_PROXIES: z.string().default(''),
+  /** Public origin, e.g. https://drucker.example.de. Used for the TOTP issuer and origin checks. */
+  PUBLIC_URL: z.string().url().optional(),
+  /**
+   * Set session cookies with the Secure flag. Defaults to true in production;
+   * the app is expected to be reached via HTTPS through the reverse proxy.
+   */
+  COOKIE_SECURE: z
+    .enum(['true', 'false', 'auto'])
+    .default('auto'),
+  SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  WEB_DIST: z.string().optional(),
+  /** Set by the Docker build (git tag or commit). */
+  APP_VERSION: z.string().default('dev'),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+});
+
+const env = envSchema.parse(process.env);
+
+export const config = {
+  ...env,
+  isProd: env.NODE_ENV === 'production',
+  dataDir: path.resolve(env.DATA_DIR),
+  trustedProxies: env.TRUSTED_PROXIES.split(',').map((s) => s.trim()).filter(Boolean),
+  cookieSecure:
+    env.COOKIE_SECURE === 'auto' ? env.NODE_ENV === 'production' : env.COOKIE_SECURE === 'true',
+  sessionTtlMs: env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+};
+export type Config = typeof config;
