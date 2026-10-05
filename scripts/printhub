@@ -3,8 +3,8 @@
 # Installed to /usr/local/bin/printhub by install.sh. Run `printhub help` for usage.
 set -Eeuo pipefail
 
-GITHUB_REPO="FelixLenz-Code/3dhubprint"
-IMAGE_REPO="ghcr.io/felixlenz-code/3dhubprint"
+GITHUB_REPO="${PRINTHUB_GITHUB_REPO:-FelixLenz-Code/3dhubprint}"
+IMAGE_REPO="${PRINTHUB_IMAGE_REPO:-ghcr.io/felixlenz-code/3dhubprint}"
 CLI_VERSION="1"
 
 PRINTHUB_DIR="${PRINTHUB_DIR:-/opt/printhub}"
