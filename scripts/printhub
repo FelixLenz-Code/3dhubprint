@@ -395,7 +395,7 @@ cmd_install() {
   image=$(obtain_image "$tag" "$ref")
   write_compose "$image"
   info "Starte PrintHub…"
-  compose up -d --remove-orphans >/dev/null
+  compose up -d --remove-orphans >>"$LOG_FILE" 2>&1
   if ! wait_healthy; then
     compose logs --tail 50 >&2 || true
     die "PrintHub ist nicht gestartet. Logs siehe oben bzw. 'printhub logs'."
@@ -543,7 +543,7 @@ cmd_update() {
   ok "Backup: $backup"
 
   write_compose "$image"
-  compose up -d --remove-orphans >/dev/null
+  compose up -d --remove-orphans >>"$LOG_FILE" 2>&1
   if wait_healthy; then
     state_set current_image "$image"
     state_set previous_image "$current"
@@ -566,7 +566,7 @@ rollback_to() {
   # The new version may already have migrated the database, so restore the data too.
   restore_backup_files "$backup"
   write_compose "$image"
-  compose up -d --remove-orphans >/dev/null
+  compose up -d --remove-orphans >>"$LOG_FILE" 2>&1
   if wait_healthy; then
     state_set current_image "$image"
     ok "Zurückgerollt auf $(running_version)."
@@ -667,7 +667,7 @@ cmd_restore() {
   safety=$(create_backup before-restore)
   info "Sicherheitskopie des aktuellen Stands: $safety"
   restore_backup_files "$file"
-  compose up -d >/dev/null
+  compose up -d >>"$LOG_FILE" 2>&1
   wait_healthy || die "PrintHub startet nach der Wiederherstellung nicht. Sicherheitskopie: $safety"
   ok "Wiederhergestellt."
 }
@@ -784,9 +784,9 @@ main() {
     rollback) cmd_rollback ;;
     status) cmd_status ;;
     logs) require_installed; compose logs --tail 200 "$@" ;;
-    restart) require_installed; load_conf; compose up -d --force-recreate >/dev/null && wait_healthy && ok "Neu gestartet." ;;
+    restart) require_installed; load_conf; compose up -d --force-recreate >>"$LOG_FILE" 2>&1 && wait_healthy && ok "Neu gestartet." ;;
     stop) require_installed; compose stop && ok "Gestoppt." ;;
-    start) require_installed; load_conf; compose up -d >/dev/null && wait_healthy && ok "Gestartet." ;;
+    start) require_installed; load_conf; compose up -d >>"$LOG_FILE" 2>&1 && wait_healthy && ok "Gestartet." ;;
     backup) cmd_backup ;;
     restore) cmd_restore "$@" ;;
     channel) cmd_channel "$@" ;;
@@ -796,7 +796,7 @@ main() {
       load_conf
       "${EDITOR:-nano}" "$ENV_FILE"
       confirm "PrintHub jetzt mit der neuen Konfiguration neu starten?" y &&
-        compose up -d --force-recreate >/dev/null && wait_healthy && ok "Neu gestartet."
+        compose up -d --force-recreate >>"$LOG_FILE" 2>&1 && wait_healthy && ok "Neu gestartet."
       ;;
     version | --version) printf 'CLI v%s, PrintHub %s\n' "$CLI_VERSION" "$(load_conf; running_version || echo '?')" ;;
     help | -h | --help) usage ;;
