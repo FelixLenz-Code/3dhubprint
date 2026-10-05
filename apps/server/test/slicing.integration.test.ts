@@ -194,6 +194,9 @@ describe('models and jobs', () => {
 
     const gcode = (await api(`/api/jobs/${id}/gcode`)).body.toString();
     expect(gcode).toContain('; copies = 3');
+    expect(job.preview).not.toBeNull();
+    const top = await api(job.preview!.top);
+    expect(top.type).toBe('image/png');
     expect(gcode).toMatch(/; thumbnail begin 32x32 \d+/);
     expect(gcode).toMatch(/; thumbnail begin 300x300 \d+/);
     // thumbnails go right after Orca's header block

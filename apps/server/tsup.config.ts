@@ -1,7 +1,8 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  // The preview worker is a separate entry so it can be started with new Worker(...).
+  entry: { index: 'src/index.ts', previewWorker: 'src/slicer/previewWorker.ts' },
   format: ['esm'],
   target: 'node22',
   platform: 'node',

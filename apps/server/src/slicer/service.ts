@@ -36,6 +36,7 @@ import {
 } from './profiles.js';
 import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail } from './mesh.js';
 import { SliceError, injectThumbnails, runOrca, thumbnailSizes } from './orca.js';
+import { bedFromSettings, renderPlatePreviewOffThread } from './gcodePreview.js';
 
 export class SlicingError extends Error {
   constructor(
@@ -78,7 +79,7 @@ export class SlicingService extends EventEmitter<Events> {
   private stopped = false;
   private loopDone?: Promise<void>;
   private starting = new Set<number>();
-  private readonly dirs: Record<'models' | 'thumbs' | 'gcode' | 'work', string>;
+  private readonly dirs: Record<'models' | 'thumbs' | 'gcode' | 'work' | 'previews', string>;
 
   constructor(
     private readonly db: Db,
@@ -93,6 +94,7 @@ export class SlicingService extends EventEmitter<Events> {
       thumbs: path.join(cfg.dataDir, 'thumbs'),
       gcode: path.join(cfg.dataDir, 'gcode'),
       work: path.join(cfg.dataDir, 'slicing'),
+      previews: path.join(cfg.dataDir, 'previews'),
     };
     for (const d of Object.values(this.dirs)) fs.mkdirSync(d, { recursive: true });
   }
@@ -315,6 +317,10 @@ export class SlicingService extends EventEmitter<Events> {
     return this.db.select().from(models).where(eq(models.id, id)).get();
   }
 
+  previewPath(jobId: number, view: 'top' | 'iso') {
+    return path.join(this.dirs.previews, `job-${jobId}-${view}.png`);
+  }
+
   thumbPath(modelId: number) {
     return path.join(this.dirs.thumbs, `model-${modelId}.png`);
   }
@@ -431,6 +437,7 @@ export class SlicingService extends EventEmitter<Events> {
     if (this.running?.jobId === id) this.running.abort.abort();
     this.db.delete(jobs).where(eq(jobs.id, id)).run();
     if (j.gcodePath) fs.rmSync(j.gcodePath, { force: true });
+    for (const v of ['top', 'iso'] as const) fs.rmSync(this.previewPath(id, v), { force: true });
     this.emit('job_removed', id);
     if (j.status === 'waiting' && j.printerId) this.renumberQueue(j.printerId);
   }
@@ -684,15 +691,28 @@ export class SlicingService extends EventEmitter<Events> {
         abort.signal,
       );
 
-      // Orca embeds no previews for plain meshes, so render our own (models side by side).
-      const meshes = await Promise.all(
-        items.map(async (i) => ({ mesh: parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath)), copies: i.copies })),
-      );
-      const mesh = layoutForPreview(meshes);
-      await injectThumbnails(
-        out.gcodePath,
-        thumbnailSizes(machineSettings).map((size) => ({ size, png: renderThumbnail(mesh, size) })),
-      );
+      // Orca embeds no previews for plain meshes: render the sliced plate from the G-code
+      // (falls back to the models if that yields nothing).
+      const sizes = thumbnailSizes(machineSettings);
+      let thumbs: { size: number; png: Buffer }[] = [];
+      try {
+        const preview = await renderPlatePreviewOffThread(out.gcodePath, bedFromSettings(machineSettings), sizes);
+        if (preview.segments > 0) {
+          await fs.promises.writeFile(this.previewPath(job.id, 'top'), preview.top);
+          await fs.promises.writeFile(this.previewPath(job.id, 'iso'), preview.iso);
+          thumbs = sizes.map((size) => ({ size, png: preview.thumbnails.get(size)! }));
+        }
+      } catch (err) {
+        this.log.warn({ err, job: job.id }, 'plate preview failed');
+      }
+      if (!thumbs.length) {
+        const meshes = await Promise.all(
+          items.map(async (i) => ({ mesh: parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath)), copies: i.copies })),
+        );
+        const mesh = layoutForPreview(meshes);
+        thumbs = sizes.map((size) => ({ size, png: renderThumbnail(mesh, size) }));
+      }
+      await injectThumbnails(out.gcodePath, thumbs);
 
       const material = String((JSON.parse(fil.settings).filament_type as string[] | undefined)?.[0] ?? 'Filament');
       const gcodeName = gcodeFileName(
@@ -784,6 +804,9 @@ export class SlicingService extends EventEmitter<Events> {
       model: list[0] ?? fallback,
       models: list.length ? list : [fallback],
       overrides: JSON.parse(j.overrides) as SliceOverrides,
+      preview: fs.existsSync(this.previewPath(j.id, 'top'))
+        ? { top: `/api/jobs/${j.id}/preview/top?v=${j.updatedAt}`, iso: `/api/jobs/${j.id}/preview/iso?v=${j.updatedAt}` }
+        : null,
       printer: p ?? null,
       profiles: { machine: prof(j.machineProfileId), process: prof(j.processProfileId), filament: prof(j.filamentProfileId) },
       copies: j.copies,

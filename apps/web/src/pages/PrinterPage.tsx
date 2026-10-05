@@ -140,22 +140,29 @@ function Overview({ printer, editable }: { printer: PrinterSummary; editable: bo
           <h2 className="mb-4 font-semibold">Temperaturen</h2>
           {connected ? (
             <>
-              <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="mb-3 space-y-2">
                 {heaters.map((h) => (
                   <HeaterControl key={h.name} printerId={printer.id} info={h} state={heaterState(h.name)} editable={editable} />
                 ))}
-                {extraSensors.map(([name, h]) => (
-                  <div key={name} className="rounded-xl bg-surface-2 px-3 py-2.5">
-                    <div className="truncate text-xs capitalize text-text-3">{name.replace(/_/g, ' ')}</div>
-                    <div className="tabular text-lg font-semibold">{formatTemp(h.temperature)}</div>
-                    <div className="text-xs text-text-3">Sensor</div>
-                  </div>
-                ))}
               </div>
+              {extraSensors.length > 0 && (
+                <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {extraSensors.map(([name, h]) => (
+                    <div key={name} className="rounded-xl bg-surface-2 px-3 py-2">
+                      <div className="truncate text-xs capitalize text-text-3">{name.replace(/_/g, ' ')}</div>
+                      <div className="tabular font-semibold">{formatTemp(h.temperature)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <TempChart samples={temps} />
             </>
           ) : (
-            <p className="text-sm text-text-3">Keine Daten, Drucker nicht verbunden.</p>
+            <p className="text-sm text-text-3">
+              {s.connection === 'klippy_not_ready'
+                ? 'Klipper ist nicht bereit. Nach dem Beheben der Ursache (z. B. Drucker einschalten) oben „Firmware-Neustart“ wählen.'
+                : 'Keine Daten, Drucker nicht verbunden.'}
+            </p>
           )}
         </Card>
 

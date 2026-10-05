@@ -50,6 +50,15 @@ export async function slicerRoutes(
     return reply.send(fs.createReadStream(file));
   });
 
+  app.get('/jobs/:id/preview/:view', async (req, reply) => {
+    const { id } = idParams.parse(req.params);
+    const { view } = z.object({ view: z.enum(['top', 'iso']) }).parse(req.params);
+    const file = slicing.previewPath(id, view);
+    if (!fs.existsSync(file)) throw new SlicingError('Keine Vorschau', 404);
+    reply.header('content-type', 'image/png').header('cache-control', 'private, max-age=86400');
+    return reply.send(fs.createReadStream(file));
+  });
+
   app.get('/models/:id/file', async (req, reply) => {
     const m = slicing.getModelRow(idParams.parse(req.params).id);
     if (!m) throw new SlicingError('Modell nicht gefunden', 404);

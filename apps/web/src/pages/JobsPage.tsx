@@ -11,6 +11,8 @@ import { JOB_STATUS, PRINTABLE, formatDims, jobTitle, queueOf, useJobs } from '.
 import { useLive } from '../lib/live';
 import { Alert, Badge, Button, Card, Spinner } from '../components/ui';
 import { describeOverrides } from '../components/slicing/SliceOptions';
+import { PlatePreview } from '../components/slicing/PlatePreview';
+import { Modal } from '../components/Modal';
 
 export function JobsPage() {
   const jobs = useJobs();
@@ -110,6 +112,7 @@ function Queues({ jobs, editable }: { jobs: JobInfo[]; editable: boolean }) {
 function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolean; first?: boolean; last?: boolean }) {
   const { busy, run } = useAction();
   const [log, setLog] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
   const printer = useLive((s) => s.printers.find((p) => p.id === job.printer?.id));
   const st = JOB_STATUS[job.status];
   const working = job.status === 'queued' || job.status === 'slicing' || job.status === 'uploading';
@@ -155,14 +158,30 @@ function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolea
   return (
     <div className="space-y-3 p-4">
       <div className="flex gap-4">
-        <div className="relative shrink-0">
-          <img src={job.model.thumbnailUrl} alt="" loading="lazy" className="size-16 rounded-lg bg-surface-2 object-contain sm:size-20" />
+        <button
+          type="button"
+          className="relative shrink-0 disabled:cursor-default"
+          onClick={() => setShowPreview(true)}
+          disabled={!job.preview}
+          title={job.preview ? 'Vorschau der geslicten Platte' : undefined}
+        >
+          <img
+            src={job.preview?.iso ?? job.model.thumbnailUrl}
+            alt=""
+            loading="lazy"
+            className="size-16 rounded-lg bg-surface-2 object-contain sm:size-20"
+          />
           {job.models.length > 1 && (
             <span className="absolute -bottom-1 -right-1 rounded-full border-2 border-surface bg-accent px-1.5 text-xs font-semibold text-accent-ink">
               +{job.models.length - 1}
             </span>
           )}
-        </div>
+        </button>
+        {job.preview && (
+          <Modal open={showPreview} onClose={() => setShowPreview(false)} title={`Vorschau: ${jobTitle(job)}`}>
+            <PlatePreview preview={job.preview} />
+          </Modal>
+        )}
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="min-w-0 break-words font-medium">{job.models.map((m) => (m.copies > 1 ? `${m.name} ×${m.copies}` : m.name)).join(', ')}</span>

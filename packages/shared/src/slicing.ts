@@ -132,6 +132,8 @@ export interface JobInfo {
   filamentMm: number | null;
   filamentG: number | null;
   note: string | null;
+  /** Rendered from the sliced G-code: whole bed from above and a 3D view of the parts. */
+  preview: { top: string; iso: string } | null;
   /** 1-based position in the printer's print queue (status = waiting). */
   queuePosition: number | null;
   finishedAt: number | null;

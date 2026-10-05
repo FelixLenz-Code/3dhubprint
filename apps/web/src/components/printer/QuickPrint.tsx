@@ -13,6 +13,7 @@ import { Alert, Button, Spinner } from '../ui';
 import { Modal } from '../Modal';
 import { ModelPicker, type PlateItem } from '../slicing/ModelPicker';
 import { describeOverrides, SliceOptions } from '../slicing/SliceOptions';
+import { PlatePreview } from '../slicing/PlatePreview';
 
 /** "Schnelldruck" button + dialog: upload → slice → review → print. */
 export function QuickPrintButton({ printer }: { printer: PrinterSummary }) {
@@ -220,8 +221,9 @@ function Result({
 
   return (
     <div className="space-y-5">
+      {job.preview && <PlatePreview preview={job.preview} />}
       <div className="flex gap-4">
-        <img src={job.model.thumbnailUrl} alt="" className="size-24 shrink-0 rounded-xl bg-surface-2 object-contain sm:size-32" />
+        {!job.preview && <img src={job.model.thumbnailUrl} alt="" className="size-24 shrink-0 rounded-xl bg-surface-2 object-contain sm:size-32" />}
         <div className="min-w-0 space-y-1">
           <div className="break-words font-semibold">{job.models.map((m) => (m.copies > 1 ? `${m.name} ×${m.copies}` : m.name)).join(', ')}</div>
           <div className="text-sm text-text-2">
