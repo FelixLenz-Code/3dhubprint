@@ -4,6 +4,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
+import multipart from '@fastify/multipart';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ZodError } from 'zod';
@@ -15,6 +16,9 @@ import { authPlugin } from './auth/plugin.js';
 import { authRoutes } from './auth/routes.js';
 import { PrinterManager } from './printers/manager.js';
 import { printerRoutes } from './printers/routes.js';
+import { controlRoutes } from './printers/controlRoutes.js';
+import { fileRoutes } from './printers/fileRoutes.js';
+import { ControlError } from './printers/control.js';
 import { MoonrakerError } from './printers/moonraker.js';
 import { wsHub } from './ws/hub.js';
 
@@ -57,6 +61,7 @@ export async function buildApp() {
   await app.register(cookie);
   await app.register(rateLimit, { max: 600, timeWindow: '1 minute' });
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
+  await app.register(multipart);
   await app.register(authPlugin, { auth });
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
@@ -68,6 +73,9 @@ export async function buildApp() {
       });
     }
     if (err instanceof AuthError) return reply.code(err.status).send({ error: err.code, message: err.message });
+    if (err instanceof ControlError) {
+      return reply.code(err.code === 'invalid' ? 400 : 409).send({ error: err.code, message: err.message });
+    }
     if (err instanceof MoonrakerError) return reply.code(502).send({ error: 'moonraker', message: err.message });
     if (err.statusCode && err.statusCode < 500) {
       return reply.code(err.statusCode).send({ error: err.code ?? 'error', message: err.message });
@@ -79,6 +87,8 @@ export async function buildApp() {
   app.get('/api/health', async () => ({ ok: true, version: config.APP_VERSION }));
   await app.register(authRoutes, { prefix: '/api/auth', auth });
   await app.register(printerRoutes, { prefix: '/api/printers', manager });
+  await app.register(controlRoutes, { prefix: '/api/printers', manager, auth });
+  await app.register(fileRoutes, { prefix: '/api/printers', manager, auth, tmpDir: path.join(config.dataDir, 'tmp') });
   await app.register(wsHub, { prefix: '/api', manager, auth });
 
   const webDist = config.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');

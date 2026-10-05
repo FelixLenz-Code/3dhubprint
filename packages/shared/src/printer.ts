@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PrinterCapabilities } from './control.js';
 
 export const printerInputSchema = z.object({
   name: z.string().trim().min(1).max(64),
@@ -71,6 +72,11 @@ export interface PrinterStatus {
   axisMaximum?: [number, number, number, number];
   /** Unix ms of last update received from the printer. */
   updatedAt?: number;
+  excludeObject?: {
+    objects: { name: string; center?: [number, number]; polygon?: [number, number][] }[];
+    excluded: string[];
+    current?: string | null;
+  };
 }
 
 export interface PrinterSummary {
@@ -81,6 +87,7 @@ export interface PrinterSummary {
   enabled: boolean;
   webcams: Webcam[];
   status: PrinterStatus;
+  capabilities?: PrinterCapabilities;
 }
 
 export interface FileMetadata {

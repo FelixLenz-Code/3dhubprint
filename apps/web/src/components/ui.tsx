@@ -1,4 +1,8 @@
-import clsx from 'clsx';
+import clsx, { type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+/** clsx + tailwind-merge: later classes (e.g. a caller's px-0) override conflicting defaults. */
+export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs));
 import { Loader2 } from 'lucide-react';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react';
 import type { Tone } from '../lib/format';
@@ -15,7 +19,7 @@ export function Button({
     <button
       {...rest}
       disabled={disabled || loading}
-      className={clsx(
+      className={cn(
         'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors',
         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50',
         variant === 'primary' && 'bg-accent text-accent-ink hover:brightness-110',
@@ -35,7 +39,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return (
     <input
       {...rest}
-      className={clsx(
+      className={cn(
         'min-h-10 w-full rounded-lg border border-border bg-surface px-3 text-sm text-text placeholder:text-text-3',
         'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30',
         className,
@@ -55,7 +59,7 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
 }
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={clsx('rounded-2xl border border-border bg-surface', className)}>{children}</div>;
+  return <div className={cn('rounded-2xl border border-border bg-surface', className)}>{children}</div>;
 }
 
 const toneClass: Record<Tone, string> = {
@@ -86,7 +90,7 @@ export function Alert({ tone = 'critical', children }: { tone?: Tone; children: 
 export function ProgressBar({ value, className }: { value: number; className?: string }) {
   return (
     <div
-      className={clsx('h-2 overflow-hidden rounded-full bg-surface-2', className)}
+      className={cn('h-2 overflow-hidden rounded-full bg-surface-2', className)}
       role="progressbar"
       aria-valuenow={Math.round(value * 100)}
       aria-valuemin={0}

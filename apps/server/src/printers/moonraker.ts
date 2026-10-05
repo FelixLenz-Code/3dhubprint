@@ -1,7 +1,14 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import { config } from '../config.js';
-import type { ConnectionState, FileMetadata, PrintState, PrinterStatus } from '@printhub/shared';
+import type {
+  ConnectionState,
+  FileMetadata,
+  HeaterInfo,
+  PrintState,
+  PrinterCapabilities,
+  PrinterStatus,
+} from '@printhub/shared';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 20_000;
@@ -30,6 +37,9 @@ export interface RawWebcam {
 interface MoonrakerEvents {
   status: [PrinterStatus];
   webcams: [RawWebcam[]];
+  capabilities: [PrinterCapabilities];
+  /** A line Klipper wrote to the G-code console. */
+  gcode: [string];
 }
 
 export class MoonrakerError extends Error {
@@ -64,6 +74,7 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
   private alive = false;
   private updatedAt?: number;
   webcams: RawWebcam[] = [];
+  capabilities?: PrinterCapabilities;
 
   constructor(
     readonly baseUrl: string,
@@ -222,16 +233,32 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
       'gcode_move',
       'idle_timeout',
       'motion_report',
+      'exclude_object',
     ];
     for (const o of objects) {
       if (base.includes(o) || /^(temperature_sensor|temperature_fan|heater_generic) /.test(o)) wanted[o] = null;
     }
     const res = await this.request<{ status: RawStatus }>('printer.objects.subscribe', { objects: wanted });
     this.raw = res.status;
+    await this.loadCapabilities(objects);
     this.klippyMessage = undefined;
     this.updatedAt = Date.now();
     this.setConnection('connected');
     void this.refreshFileMetadata();
+  }
+
+  private async loadCapabilities(objects: string[]) {
+    let settings: Record<string, Record<string, unknown>> = {};
+    try {
+      const res = await this.request<{ status: { configfile?: { settings?: typeof settings } } }>('printer.objects.query', {
+        objects: { configfile: ['settings'] },
+      });
+      settings = res.status.configfile?.settings ?? {};
+    } catch {
+      /* fall back to defaults below */
+    }
+    this.capabilities = deriveCapabilities(objects, settings);
+    this.emit('capabilities', this.capabilities);
   }
 
   private async loadWebcams() {
@@ -279,6 +306,9 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
       case 'notify_klippy_disconnected':
         this.klippyState = msg.method === 'notify_klippy_shutdown' ? 'shutdown' : 'disconnected';
         void this.checkKlippy().catch(() => {});
+        break;
+      case 'notify_gcode_response':
+        for (const line of (msg.params as string[] | undefined) ?? []) this.emit('gcode', line);
         break;
       case 'notify_webcams_changed':
         void this.loadWebcams();
@@ -418,5 +448,49 @@ export function deriveStatus(
     position: (gm.gcode_position as PrinterStatus['position']) ?? undefined,
     homedAxes: th.homed_axes as string | undefined,
     axisMaximum: th.axis_maximum as PrinterStatus['axisMaximum'],
+    excludeObject: raw.exclude_object
+      ? {
+          objects: (raw.exclude_object.objects as NonNullable<PrinterStatus['excludeObject']>['objects']) ?? [],
+          excluded: (raw.exclude_object.excluded_objects as string[]) ?? [],
+          current: (raw.exclude_object.current_object as string | null) ?? null,
+        }
+      : undefined,
+  };
+}
+
+const HEATER_LABELS: Record<string, string> = { extruder: 'Düse', heater_bed: 'Bett' };
+
+/** Heaters with their configured limits and the user-facing macros. */
+export function deriveCapabilities(
+  objects: string[],
+  settings: Record<string, Record<string, unknown>>,
+): PrinterCapabilities {
+  const heaters: HeaterInfo[] = [];
+  for (const o of objects) {
+    if (!/^(extruder\d*|heater_bed|heater_generic .+)$/.test(o)) continue;
+    const cfg = settings[o] ?? {};
+    const label =
+      HEATER_LABELS[o] ?? (o.startsWith('extruder') ? `Düse ${o.slice(8)}` : o.slice(o.indexOf(' ') + 1).replace(/_/g, ' '));
+    heaters.push({
+      name: o,
+      label,
+      minTemp: num(cfg.min_temp) ?? 0,
+      // Without config, fall back to conservative limits.
+      maxTemp: num(cfg.max_temp) ?? (o === 'heater_bed' ? 120 : 280),
+    });
+  }
+  // Hotends first, then the bed, then everything else.
+  const rank = (h: HeaterInfo) => (h.name.startsWith('extruder') ? 0 : h.name === 'heater_bed' ? 1 : 2);
+  heaters.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const macros = objects
+    .filter((o) => o.startsWith('gcode_macro '))
+    .map((o) => o.slice('gcode_macro '.length))
+    .filter((m) => !m.startsWith('_') && !/^[GM]\d+$/i.test(m))
+    .sort((a, b) => a.localeCompare(b));
+  return {
+    heaters,
+    macros,
+    hasFan: objects.includes('fan'),
+    hasExcludeObject: objects.includes('exclude_object'),
   };
 }

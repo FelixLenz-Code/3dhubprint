@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from 'react';
-import type { PrinterSummary, ServerMessage, TempSample } from '@printhub/shared';
+import type { ConsoleLine, PrinterSummary, ServerMessage, TempSample } from '@printhub/shared';
 
 const HISTORY_MS = 20 * 60 * 1000;
+const CONSOLE_LINES = 300;
 
 type Listener = () => void;
 export type LiveConnection = 'connecting' | 'open' | 'closed';
@@ -10,6 +11,7 @@ interface State {
   connection: LiveConnection;
   printers: PrinterSummary[];
   temps: Record<number, TempSample[]>;
+  consoles: Record<number, ConsoleLine[]>;
 }
 
 /**
@@ -17,7 +19,7 @@ interface State {
  * useSyncExternalStore; each update replaces the state object immutably.
  */
 class LiveStore {
-  private state: State = { connection: 'connecting', printers: [], temps: {} };
+  private state: State = { connection: 'connecting', printers: [], temps: {}, consoles: {} };
   private listeners = new Set<Listener>();
   private ws: WebSocket | null = null;
   private retry = 1000;
@@ -41,7 +43,7 @@ class LiveStore {
     clearTimeout(this.timer);
     this.ws?.close();
     this.ws = null;
-    this.set({ connection: 'closed', printers: [], temps: {} });
+    this.set({ connection: 'closed', printers: [], temps: {}, consoles: {} });
   }
 
   /** Seeds the history (e.g. from Moonraker's temperature store) without dropping live samples. */
@@ -50,6 +52,14 @@ class LiveStore {
     const firstLive = live[0]?.t ?? Infinity;
     const merged = [...samples.filter((s) => s.t < firstLive), ...live];
     this.set({ temps: { ...this.state.temps, [printerId]: merged } });
+  }
+
+  /** Seeds the console from the server's buffer; live lines received meanwhile are kept. */
+  seedConsole(printerId: number, lines: ConsoleLine[]) {
+    const live = this.state.consoles[printerId] ?? [];
+    const firstLive = live[0]?.t ?? Infinity;
+    const merged = [...lines.filter((l) => l.t < firstLive), ...live].slice(-CONSOLE_LINES);
+    this.set({ consoles: { ...this.state.consoles, [printerId]: merged } });
   }
 
   private connect() {
@@ -93,6 +103,11 @@ class LiveStore {
         const start = prev.findIndex((s) => s.t >= cutoff);
         const next = [...(start > 0 ? prev.slice(start) : prev), msg.sample];
         this.set({ temps: { ...this.state.temps, [msg.printerId]: next } });
+        break;
+      }
+      case 'console': {
+        const next = [...(this.state.consoles[msg.printerId] ?? []), ...msg.lines].slice(-CONSOLE_LINES);
+        this.set({ consoles: { ...this.state.consoles, [msg.printerId]: next } });
         break;
       }
     }

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
-import type { PrinterInput, PrinterStatus, PrinterSummary, TempSample, Webcam } from '@printhub/shared';
+import type { ConsoleLine, PrinterInput, PrinterStatus, PrinterSummary, TempSample, Webcam } from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { printers } from '../db/schema.js';
 import type { SecretBox } from '../crypto.js';
@@ -12,15 +12,20 @@ type PrinterRow = typeof printers.$inferSelect;
 interface ManagerEvents {
   status: [number, PrinterStatus];
   temps: [number, TempSample];
+  console: [number, ConsoleLine[]];
   changed: [];
 }
 
 const TEMP_SAMPLE_MS = 1000;
+const CONSOLE_LINES = 300;
+// Klipper echoes these periodically; they only clutter the console.
+const CONSOLE_NOISE = /^(B:|T\d?:|ok$|\/\/ Klipper state: Ready)/;
 
 /** Owns one MoonrakerClient per enabled printer and relays their events. */
 export class PrinterManager extends EventEmitter<ManagerEvents> {
   private clients = new Map<number, MoonrakerClient>();
   private rows = new Map<number, PrinterRow>();
+  private consoles = new Map<number, ConsoleLine[]>();
   private sampleTimer?: NodeJS.Timeout;
 
   constructor(
@@ -115,7 +120,24 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
       enabled: row.enabled,
       webcams: client ? client.webcams.map((w, i) => toWebcam(row.id, i, w)) : [],
       status: client ? client.status : { connection: 'disabled' },
+      capabilities: client?.capabilities,
     };
+  }
+
+  consoleHistory(id: number): ConsoleLine[] {
+    return this.consoles.get(id) ?? [];
+  }
+
+  /** Records a command sent by a user so it shows up in everyone's console. */
+  recordCommand(id: number, script: string) {
+    this.pushConsole(id, script.split('\n').map((text) => ({ t: Date.now(), text, kind: 'command' as const })));
+  }
+
+  private pushConsole(id: number, lines: ConsoleLine[]) {
+    if (!lines.length) return;
+    const buf = [...(this.consoles.get(id) ?? []), ...lines].slice(-CONSOLE_LINES);
+    this.consoles.set(id, buf);
+    this.emit('console', id, lines);
   }
 
   private startClient(row: PrinterRow) {
@@ -130,6 +152,10 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
     const client = new MoonrakerClient(row.url, apiKey, this.log.child({ printer: row.id }));
     client.on('status', (s) => this.emit('status', row.id, s));
     client.on('webcams', () => this.emit('changed'));
+    client.on('capabilities', () => this.emit('changed'));
+    client.on('gcode', (text) => {
+      if (!CONSOLE_NOISE.test(text)) this.pushConsole(row.id, [{ t: Date.now(), text, kind: 'response' }]);
+    });
     this.clients.set(row.id, client);
     client.start();
   }
@@ -137,6 +163,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
   private stopClient(id: number) {
     this.clients.get(id)?.stop();
     this.clients.delete(id);
+    this.consoles.delete(id);
   }
 
   private emitTempSamples() {

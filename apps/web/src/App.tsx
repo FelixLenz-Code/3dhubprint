@@ -4,6 +4,7 @@ import { useAuth, useRefreshAuth } from './lib/auth';
 import { live } from './lib/live';
 import { Layout } from './components/Layout';
 import { Spinner } from './components/ui';
+import { ConfirmHost, Toaster } from './lib/feedback';
 import { LoginPage, SetupPage } from './pages/AuthPages';
 import { DashboardPage } from './pages/Dashboard';
 import { PrinterPage } from './pages/PrinterPage';
@@ -37,6 +38,7 @@ export function App() {
   if (data.state === 'anonymous') return <LoginPage />;
 
   return (
+    <>
     <Routes>
       <Route element={<Layout user={data.user} />}>
         <Route index element={<DashboardPage />} />
@@ -45,5 +47,8 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
+    <Toaster />
+    <ConfirmHost />
+    </>
   );
 }

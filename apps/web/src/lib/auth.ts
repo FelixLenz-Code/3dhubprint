@@ -12,3 +12,9 @@ export function useRefreshAuth() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: authKey });
 }
+
+/** True when the signed-in user may control printers. */
+export function useIsAdmin() {
+  const { data } = useAuth();
+  return data?.state === 'authenticated' && data.user.role === 'admin';
+}

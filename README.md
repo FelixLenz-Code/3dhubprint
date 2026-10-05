@@ -8,8 +8,8 @@ Selbst gehostete PWA zur Überwachung und Verwaltung von Klipper/Moonraker-3D-Dr
 | Phase | Inhalt | Status |
 |---|---|---|
 | 0 | Spike: Moonraker-Anbindung, OrcaSlicer-CLI mit eigenen Profilen | erledigt |
-| 1 | Gerüst, Login mit 2FA, Drucker verwalten, Live-Dashboard, Webcam, PWA | **erledigt** |
-| 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Makros), G-Code-Upload, Verlauf | offen |
+| 1 | Gerüst, Login mit 2FA, Drucker verwalten, Live-Dashboard, Webcam, PWA | erledigt |
+| 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Bewegen, Makros, Objekte ausschließen), Konsole, G-Code-Upload, Verlauf | **erledigt** |
 | 3 | Orca-Profilimport + Zuordnung, STL-Upload, Slicer-Worker, Aufträge | offen |
 | 4 | Warteschlange mit „Bett frei“-Bestätigung, Web-Push | offen |
 | 5 | Thingiverse-Suche | offen |
@@ -94,7 +94,8 @@ server {
     server_name drucker.example.de;
     # ssl_certificate ... (wie bei deinen anderen Seiten)
 
-    client_max_body_size 500M;          # STL/3MF-Uploads (ab Phase 3)
+    client_max_body_size 1024M;         # G-Code-/STL-Uploads (bis 1 GB)
+    proxy_request_buffering off;        # große Uploads direkt durchreichen
 
     location / {
         proxy_pass http://<VM-IP>:8080;

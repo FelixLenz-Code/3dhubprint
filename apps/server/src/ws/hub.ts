@@ -19,6 +19,7 @@ export async function wsHub(app: FastifyInstance, { manager, auth }: { manager: 
 
   manager.on('status', (printerId, status) => broadcast({ type: 'status', printerId, status }));
   manager.on('temps', (printerId, sample) => broadcast({ type: 'temps', printerId, sample }));
+  manager.on('console', (printerId, lines) => broadcast({ type: 'console', printerId, lines }));
   manager.on('changed', () => broadcast({ type: 'snapshot', printers: manager.list() }));
 
   app.get('/ws', { websocket: true, preValidation: app.requireAuth }, (socket, req) => {

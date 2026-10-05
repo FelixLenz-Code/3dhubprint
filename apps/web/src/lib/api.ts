@@ -26,3 +26,25 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   return data as T;
 }
+
+/** Multipart upload with progress (fetch cannot report upload progress). */
+export function uploadWithProgress<T>(path: string, form: FormData, onProgress: (fraction: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api${path}`);
+    xhr.setRequestHeader('x-printhub-request', '1');
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onerror = () => reject(new ApiError(0, 'network', 'Netzwerkfehler beim Hochladen'));
+    xhr.onload = () => {
+      let data: { error?: string; message?: string } | null = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* non-JSON error page */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T);
+      else reject(new ApiError(xhr.status, data?.error ?? 'error', data?.message ?? `HTTP ${xhr.status}`));
+    };
+    xhr.send(form);
+  });
+}
