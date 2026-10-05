@@ -43,7 +43,7 @@ export function SliceResult({
         <Spinner className="size-8" />
         <div className="font-medium">{JOB_STATUS[job.status].label}…</div>
         <p className="max-w-sm text-sm text-text-3">
-          OrcaSlicer bereitet {job.copies === 1 ? 'das Modell' : `${job.copies} Objekte`} vor. Du kannst den Dialog schließen; der Auftrag läuft unter „Aufträge“ weiter.
+          OrcaSlicer bereitet {job.copies === 1 ? 'das Modell' : `${job.copies} Objekte`} vor. {job.draft ? 'Bitte hier warten: Wer die Seite oder den Dialog verlässt, verwirft den Auftrag.' : 'Der Auftrag läuft unter „Aufträge“ weiter.'}
         </p>
       </div>
     );
