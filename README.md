@@ -30,7 +30,7 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
    Sie bestimmt, welche Betttemperatur aus dem Filamentprofil gilt.
 3. **Aufträge → Neuer Auftrag** führt in vier Schritten durch den Auftrag:
    1. *Modelle & Drucker:* Modelle hochladen oder aus der Bibliothek wählen, Drucker wählen.
-   2. *Druckbett:* Alle Teile in 3D auf dem Bett, mit farbigen X/Y/Z-Achsen. Pro Teil:
+   2. *Druckbett:* Alle Teile in 3D auf dem Bett, mit farbigen X/Y/Z-Achsen in der Bettecke. Pro Teil:
       Stückzahl, **Einheit** (mm/cm/Zoll/m für falsch skalierte Dateien), **„Flach hinlegen“**
       (PrintHub wählt die Seite mit der größten Auflage und den wenigsten Überhängen), Drehen in
       90°-Schritten, eine Fläche selbst wählen, Größe in %. Mit ausgeschaltetem „Automatisch anordnen“ lassen sich die Teile frei
@@ -54,7 +54,8 @@ Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in de
 
 Unter **Modelle** liegt die Bibliothek (Suche, Download, Mehrfachauswahl → „Auftrag anlegen“).
 Der Tab **Thingiverse** zeigt Vorschläge (beliebt, neu, empfohlen), durchsucht thingiverse.com, zeigt Bilder, Lizenz, Urheber und Dateien
-und übernimmt ausgewählte Dateien (STL/3MF/OBJ, ZIP-Archive werden entpackt) in die Bibliothek,
+und übernimmt Dateien (STL/3MF/OBJ, ZIP-Archive werden entpackt) einzeln oder als Auswahl in die Bibliothek oder
+direkt in einen neuen Auftrag („Slicen“),
 inklusive Quelle, Lizenz und Urheber.
 
 Einrichtung: *Einstellungen → Integrationen*. Auf thingiverse.com/developers eine App anlegen und

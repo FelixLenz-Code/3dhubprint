@@ -225,8 +225,6 @@ export default function PlateEditor({
         invalid: bad.has(`${p.item}:${p.copy}`) || sizes[p.item]![2] > bed.height,
       }));
     scene.current?.setObjects(objs);
-    const p = placed.find((q) => q.item === selected);
-    scene.current?.setPartAxes(p ? { x: p.x, y: p.y, z: p.h / 2, size: Math.max(p.w, p.d, p.h) / 2 } : null);
   });
 
   // --- editing --------------------------------------------------------------

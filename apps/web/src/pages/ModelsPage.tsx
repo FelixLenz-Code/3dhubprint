@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Box, Check, Download, ExternalLink, Heart, Search, Trash2, Upload } from 'lucide-react';
+import { Box, Check, Cog, Download, ExternalLink, Heart, Search, Trash2, Upload } from 'lucide-react';
 import clsx from 'clsx';
 import {
   THINGIVERSE_SORTS,
@@ -343,14 +343,20 @@ function ThingDetailsView({ id }: { id: number }) {
   if (thing.error || !thing.data) return <Alert>{(thing.error as Error)?.message ?? 'Nicht gefunden'}</Alert>;
   const t = thing.data;
   const importable = t.files.filter((f) => f.importable);
-  const sel = chosen ?? new Set(importable.map((f) => f.id));
+  // With several files, nothing is preselected: pick what you need.
+  const sel = chosen ?? new Set(importable.length === 1 ? [importable[0]!.id] : []);
   const toggle = (fid: number) => setChosen(new Set(sel.has(fid) ? [...sel].filter((x) => x !== fid) : [...sel, fid]));
 
-  const doImport = () =>
-    run('import', async () => {
-      const models = await api<ModelInfo[]>(`/thingiverse/things/${id}/import`, { body: { fileIds: [...sel] } });
-      setImported(models);
+  /** Downloads the files into the library; `slice` continues straight to a new job. */
+  const doImport = (fileIds: number[], slice: boolean, key: string) =>
+    run(key, async () => {
+      const models = await api<ModelInfo[]>(`/thingiverse/things/${id}/import`, { body: { fileIds } });
       await qc.invalidateQueries({ queryKey: ['models'] });
+      if (slice) {
+        navigate(`/jobs/new?models=${models.map((m) => m.id).join(',')}`);
+        return;
+      }
+      setImported(models);
       toast(`${models.length} ${models.length === 1 ? 'Modell' : 'Modelle'} in die Bibliothek übernommen`);
     });
 
@@ -403,12 +409,47 @@ function ThingDetailsView({ id }: { id: number }) {
         <div className="text-sm font-medium">Dateien</div>
         <ul className="divide-y divide-border rounded-xl border border-border">
           {t.files.map((f) => (
-            <li key={f.id}>
-              <label className={clsx('flex items-center gap-3 px-3 py-2', !f.importable && 'opacity-50')}>
+            <li key={f.id} className={clsx('flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2', !f.importable && 'opacity-50')}>
+              <label className="flex min-w-0 flex-1 items-center gap-3">
                 <input type="checkbox" disabled={!f.importable || !isAdmin} checked={f.importable && sel.has(f.id)} onChange={() => toggle(f.id)} className="accent-[var(--accent)]" />
-                <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
-                <span className="tabular shrink-0 text-xs text-text-3">{f.importable ? formatBytes(f.size) : 'nicht unterstützt'}</span>
+                {f.thumbnail ? (
+                  <img src={f.thumbnail} alt="" loading="lazy" className="size-12 shrink-0 rounded-md bg-surface-2 object-contain" />
+                ) : (
+                  <span className="flex size-12 shrink-0 items-center justify-center rounded-md bg-surface-2">
+                    <Box className="size-5 text-text-3" />
+                  </span>
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm" title={f.name}>
+                    {f.name}
+                  </span>
+                  <span className="tabular block text-xs text-text-3">{f.importable ? formatBytes(f.size) : 'nicht unterstützt'}</span>
+                </span>
               </label>
+              {isAdmin && f.importable && (
+                <div className="ml-auto flex shrink-0 gap-1">
+                  <Button
+                    variant="ghost"
+                    className="h-8 min-h-8 px-2 text-xs"
+                    onClick={() => doImport([f.id], false, `lib-${f.id}`)}
+                    loading={busy === `lib-${f.id}`}
+                    disabled={!!busy}
+                    title="In die Bibliothek übernehmen"
+                  >
+                    <Download className="size-3.5" /> Bibliothek
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="h-8 min-h-8 px-2 text-xs"
+                    onClick={() => doImport([f.id], true, `slice-${f.id}`)}
+                    loading={busy === `slice-${f.id}`}
+                    disabled={!!busy}
+                    title="Übernehmen und direkt einen Auftrag anlegen"
+                  >
+                    <Cog className="size-3.5" /> Slicen
+                  </Button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -423,9 +464,21 @@ function ThingDetailsView({ id }: { id: number }) {
         </div>
       ) : (
         isAdmin && (
-          <div className="flex justify-end">
-            <Button onClick={doImport} disabled={!sel.size} loading={busy === 'import'}>
-              <Download className="size-4" /> {sel.size === 1 ? 'Datei' : `${sel.size} Dateien`} in die Bibliothek übernehmen
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {importable.length > 1 && (
+              <button
+                type="button"
+                className="mr-auto text-sm text-accent hover:underline"
+                onClick={() => setChosen(sel.size === importable.length ? new Set() : new Set(importable.map((f) => f.id)))}
+              >
+                {sel.size === importable.length ? 'Auswahl aufheben' : 'Alle auswählen'}
+              </button>
+            )}
+            <Button variant="secondary" onClick={() => doImport([...sel], false, 'import')} disabled={!sel.size || !!busy} loading={busy === 'import'}>
+              <Download className="size-4" /> {sel.size > 1 ? `${sel.size} Dateien` : 'Auswahl'} in die Bibliothek
+            </Button>
+            <Button onClick={() => doImport([...sel], true, 'slice')} disabled={!sel.size || !!busy} loading={busy === 'slice'}>
+              <Cog className="size-4" /> {sel.size > 1 ? `${sel.size} Dateien` : 'Auswahl'} slicen
             </Button>
           </div>
         )

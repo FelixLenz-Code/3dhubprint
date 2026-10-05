@@ -94,7 +94,6 @@ export class PlateScene {
   private camera = new THREE.PerspectiveCamera(35, 1, 5, 20000);
   private controls: OrbitControls;
   private bedGroup = new THREE.Group();
-  private partAxes: THREE.Group | null = null;
   private objects = new Map<string, { mesh: THREE.Mesh; obj: SceneObject }>();
   private raycaster = new THREE.Raycaster();
   private resize: ResizeObserver;
@@ -193,20 +192,6 @@ export class PlateScene {
       const mat = mesh.material as THREE.MeshStandardMaterial;
       mat.color.set(obj.invalid ? 0xff8080 : 0xffffff);
       mat.emissive.set(obj.selected ? 0x553311 : 0x000000);
-    }
-    this.render();
-  }
-
-  /** Axes through the selected part's center (null hides them). */
-  setPartAxes(at: { x: number; y: number; z: number; size: number } | null) {
-    if (this.partAxes) {
-      this.scene.remove(this.partAxes);
-      this.partAxes = null;
-    }
-    if (at) {
-      this.partAxes = axesGizmo(Math.max(15, at.size * 0.6 + 8));
-      this.partAxes.position.set(at.x, at.y, at.z);
-      this.scene.add(this.partAxes);
     }
     this.render();
   }
