@@ -30,6 +30,15 @@ describe('NotificationService', () => {
     expect(push.publicKey.length).toBeGreaterThan(80);
   });
 
+  it('survives a changed APP_SECRET by creating new keys and dropping old subscriptions', () => {
+    const { db, push } = setup();
+    db.insert(users).values({ username: 'u', passwordHash: 'x', createdAt: 0 }).run();
+    push.subscribe(1, { endpoint: 'https://push.example.org/a', keys: { p256dh: 'p', auth: 'a' } }, ['print_done'], null);
+    const other = new NotificationService(db, new SecretBox('anderes-secret'.repeat(3)), pino({ level: 'silent' }), 'mailto:x@example.org');
+    expect(other.publicKey).not.toBe(push.publicKey);
+    expect(other.devices(1)).toEqual([]);
+  });
+
   it('turns print events into the right notifications', () => {
     const { send, manager } = setup();
     manager.emit('print', { type: 'finished', printerId: 1, filename: 'sub/halter.gcode', result: 'complete', duration: 3720 });

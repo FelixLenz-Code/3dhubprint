@@ -11,8 +11,8 @@ Selbst gehostete PWA zur Überwachung und Verwaltung von Klipper/Moonraker-3D-Dr
 | 1 | Gerüst, Login mit 2FA, Drucker verwalten, Live-Dashboard, Webcam, PWA | erledigt |
 | 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Bewegen, Makros, Objekte ausschließen), Konsole, G-Code-Upload, Verlauf | erledigt |
 | 3 | Orca-Profilimport + Zuordnung, Modell-Bibliothek (STL/3MF/OBJ), Slicen mit OrcaSlicer, Aufträge, Schnelldruck | erledigt |
-| 4 | Warteschlange mit „Bett frei“-Bestätigung, Druckende erkennen, Web-Push | **erledigt** |
-| 5 | Thingiverse-Suche | offen |
+| 4 | Warteschlange mit „Bett frei“-Bestätigung, Druckende erkennen, Web-Push | erledigt |
+| 5 | Thingiverse-Suche und -Import in die Modell-Bibliothek | **erledigt** |
 | 6 | Spoolman, Statistiken, Kosten | offen |
 
 ## Slicen
@@ -37,6 +37,21 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
 
 Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in den G-Code ein
 (Größen aus der Einstellung `thumbnails` des Druckerprofils, sonst 32 und 300 px).
+
+## Modelle & Thingiverse
+
+Unter **Modelle** liegt die Bibliothek (Suche, Download, Mehrfachauswahl → „Auftrag anlegen“).
+Der Tab **Thingiverse** durchsucht thingiverse.com, zeigt Bilder, Lizenz, Urheber und Dateien
+und übernimmt ausgewählte Dateien (STL/3MF/OBJ, ZIP-Archive werden entpackt) in die Bibliothek,
+inklusive Quelle, Lizenz und Urheber.
+
+Einrichtung: *Einstellungen → Integrationen*. Auf thingiverse.com/developers eine App anlegen und
+deren **App Token** einfügen; PrintHub prüft ihn und speichert ihn verschlüsselt. Bitte die Lizenz
+der Modelle beachten (viele sind „Non-Commercial“).
+
+Nach dem Slicen zeigt PrintHub eine **Vorschau der geslicten Platte** (aus dem G-Code gerendert:
+Draufsicht des Druckbetts und 3D-Ansicht); dieselbe Ansicht wird als Vorschaubild für
+Fluidd/Mainsail in den G-Code eingebettet.
 
 ## Warteschlange
 

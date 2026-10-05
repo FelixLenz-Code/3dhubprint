@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, Check } from 'lucide-react';
 import clsx from 'clsx';
@@ -40,7 +40,13 @@ export function NewJobPage() {
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api<SlicerProfileInfo[]>('/slicer/profiles') });
   const assignments = useAssignments();
 
-  const [items, setItems] = useState<PlateItem[]>([]);
+  // /jobs/new?models=1,2 preselects models (from the library or a Thingiverse import).
+  const [params] = useSearchParams();
+  const [items, setItems] = useState<PlateItem[]>(() =>
+    [...new Set((params.get('models') ?? '').split(',').map(Number))]
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .map((modelId) => ({ modelId, copies: 1 })),
+  );
   const [printerId, setPrinterId] = useState<number>();
   const [proc, setProc] = useState('');
   const [fil, setFil] = useState('');

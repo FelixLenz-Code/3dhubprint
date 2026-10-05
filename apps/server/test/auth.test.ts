@@ -75,6 +75,21 @@ describe('AuthService', () => {
   });
 });
 
+describe('changed APP_SECRET', () => {
+  it('still accepts recovery codes when the TOTP secret can no longer be decrypted', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'printhub-test-'));
+    const { db } = openDb(dir);
+    const before = new AuthService(db, new SecretBox('a'.repeat(32)), 60_000, 'PrintHub');
+    const user = await before.setup('admin', PW, meta);
+    const { secret } = await before.beginTotp(user);
+    const codes = before.confirmTotp((await before.login('admin', PW, undefined, meta)), authenticator.generate(secret), meta);
+
+    const after = new AuthService(db, new SecretBox('b'.repeat(32)), 60_000, 'PrintHub');
+    await expect(after.login('admin', PW, '123456', meta)).rejects.toMatchObject({ code: 'invalid_code' });
+    await expect(after.login('admin', PW, codes[0]!, meta)).resolves.toBeTruthy();
+  });
+});
+
 describe('normalizeRecoveryCode', () => {
   it('accepts different spellings', () => {
     expect(normalizeRecoveryCode(' ABCD efgh-JKMN ')).toBe('abcd-efgh-jkmn');

@@ -33,6 +33,8 @@ export const envSchema = z.object({
   ORCA_VERSION: z.string().default('2.4.2'),
   SLICE_TIMEOUT_MIN: z.coerce.number().positive().default(30),
   MAX_MODEL_MB: z.coerce.number().positive().default(300),
+  /** Overridable for tests. */
+  THINGIVERSE_API: z.string().url().default('https://api.thingiverse.com'),
   /** Set by the Docker build (git tag or commit). */
   APP_VERSION: z.string().default('dev'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

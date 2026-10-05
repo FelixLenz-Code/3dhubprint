@@ -25,6 +25,8 @@ import { SlicingError, SlicingService } from './slicer/service.js';
 import { slicerRoutes } from './slicer/routes.js';
 import { NotificationService } from './notifications/service.js';
 import { pushRoutes } from './notifications/routes.js';
+import { ThingiverseError, ThingiverseService } from './thingiverse/service.js';
+import { thingiverseRoutes } from './thingiverse/routes.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -53,6 +55,11 @@ export async function buildApp() {
   const pushSubject = config.PUBLIC_URL?.startsWith('https://') ? config.PUBLIC_URL : 'mailto:printhub@localhost';
   const push = new NotificationService(db, box, app.log.child({ module: 'push' }), pushSubject);
   push.attach(manager, slicing);
+  const tv = new ThingiverseService(db, box, slicing, {
+    apiBase: config.THINGIVERSE_API,
+    tmpDir: path.join(config.dataDir, 'tmp'),
+    maxModelBytes: config.MAX_MODEL_MB * 1024 * 1024,
+  });
 
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -89,6 +96,7 @@ export async function buildApp() {
     }
     if (err instanceof AuthError) return reply.code(err.status).send({ error: err.code, message: err.message });
     if (err instanceof SlicingError) return reply.code(err.status).send({ error: 'slicing', message: err.message });
+    if (err instanceof ThingiverseError) return reply.code(err.status).send({ error: 'thingiverse', message: err.message });
     if (err instanceof ControlError) {
       return reply.code(err.code === 'invalid' ? 400 : 409).send({ error: err.code, message: err.message });
     }
@@ -113,6 +121,7 @@ export async function buildApp() {
     maxModelBytes: config.MAX_MODEL_MB * 1024 * 1024,
   });
   await app.register(pushRoutes, { prefix: '/api/push', push });
+  await app.register(thingiverseRoutes, { prefix: '/api/thingiverse', tv, auth });
   await app.register(wsHub, { prefix: '/api', manager, auth, slicing });
 
   const webDist = config.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');

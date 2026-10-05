@@ -11,6 +11,7 @@ import { PrinterPage } from './pages/PrinterPage';
 import { SettingsPage } from './pages/Settings';
 import { JobsPage } from './pages/JobsPage';
 import { NewJobPage } from './pages/NewJobPage';
+import { ModelsPage } from './pages/ModelsPage';
 
 export function App() {
   const { data, isLoading } = useAuth();
@@ -47,6 +48,7 @@ export function App() {
         <Route path="printers/:id" element={<PrinterPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="jobs/new" element={<NewJobPage />} />
+        <Route path="models" element={<ModelsPage />} />
         <Route path="settings/*" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

@@ -261,8 +261,9 @@ export class AuthService {
   /** Accepts a TOTP code or an unused recovery code (consumed on success). */
   private checkSecondFactor(user: UserRow, code: string): boolean {
     const trimmed = code.replace(/\s/g, '');
-    if (/^\d{6}$/.test(trimmed) && user.totpSecret) {
-      const step = verifyTotp(this.box.decrypt(user.totpSecret), trimmed);
+    const secret = user.totpSecret ? this.tryDecrypt(user.totpSecret) : null;
+    if (/^\d{6}$/.test(trimmed) && secret) {
+      const step = verifyTotp(secret, trimmed);
       if (step === null || (user.totpLastStep !== null && step <= user.totpLastStep)) return false;
       this.db.update(users).set({ totpLastStep: step }).where(eq(users.id, user.id)).run();
       return true;
@@ -276,6 +277,15 @@ export class AuthService {
       )
       .run();
     return res.changes > 0;
+  }
+
+  /** A changed APP_SECRET must not lock users out: recovery codes (hashed, not encrypted) still work. */
+  private tryDecrypt(box: string): string | null {
+    try {
+      return this.box.decrypt(box);
+    } catch {
+      return null;
+    }
   }
 
   private registerFailure(user: UserRow, meta: RequestMeta, reason: string) {

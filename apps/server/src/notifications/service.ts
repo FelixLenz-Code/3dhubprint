@@ -48,13 +48,17 @@ export class NotificationService {
     const row = this.db.select().from(appSettings).where(eq(appSettings.key, 'vapid')).get();
     if (row) {
       const stored = JSON.parse(row.value) as { publicKey: string; privateKey: string };
-      return { publicKey: stored.publicKey, privateKey: this.box.decrypt(stored.privateKey) };
+      try {
+        return { publicKey: stored.publicKey, privateKey: this.box.decrypt(stored.privateKey) };
+      } catch {
+        // APP_SECRET changed: the old key is unusable, and so are subscriptions made with it.
+        this.log.error('VAPID-Schlüssel nicht entschlüsselbar (APP_SECRET geändert?) – erzeuge neue; Geräte müssen Benachrichtigungen neu aktivieren');
+        this.db.delete(pushSubscriptions).run();
+      }
     }
     const keys = webpush.generateVAPIDKeys();
-    this.db
-      .insert(appSettings)
-      .values({ key: 'vapid', value: JSON.stringify({ publicKey: keys.publicKey, privateKey: this.box.encrypt(keys.privateKey) }) })
-      .run();
+    const value = JSON.stringify({ publicKey: keys.publicKey, privateKey: this.box.encrypt(keys.privateKey) });
+    this.db.insert(appSettings).values({ key: 'vapid', value }).onConflictDoUpdate({ target: appSettings.key, set: { value } }).run();
     return keys;
   }
 
