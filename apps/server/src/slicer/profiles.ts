@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { unzipSync, strFromU8 } from 'fflate';
-import type { SliceOverrides } from '@printhub/shared';
+import { BED_TYPES, type SliceOverrides } from '@printhub/shared';
 
 export type ProfileKind = 'machine' | 'process' | 'filament';
 type Json = Record<string, unknown>;
@@ -215,8 +215,11 @@ export function summarize(kind: ProfileKind, s: Json): ProfileSummary {
       nozzle: num(s.nozzle_diameter),
       bedX: xs.length ? Math.max(...xs) - Math.min(...xs) : undefined,
       bedY: ys.length ? Math.max(...ys) - Math.min(...ys) : undefined,
+      bedX0: xs.length ? Math.min(...xs) : undefined,
+      bedY0: ys.length ? Math.min(...ys) : undefined,
       height: num(s.printable_height),
       flavor: first(s.gcode_flavor),
+      defaultBedType: first(s.default_bed_type),
     };
   }
   if (kind === 'process') {
@@ -240,12 +243,16 @@ export function summarize(kind: ProfileKind, s: Json): ProfileSummary {
     material: first(s.filament_type),
     nozzleTemp: num(s.nozzle_temperature),
     bedTemp: num(s.hot_plate_temp) ?? num(s.textured_plate_temp),
+    // Per plate, keyed like the Orca setting (see BED_TYPES).
+    ...Object.fromEntries(PLATE_TEMPS.map((k) => [k, num(s[k])])),
     flow: num(s.filament_flow_ratio),
     diameter: num(s.filament_diameter),
     density: num(s.filament_density),
     cost: num(s.filament_cost),
   };
 }
+
+const PLATE_TEMPS = Object.values(BED_TYPES).map((b) => b.temp);
 
 const BRIM_TO_ORCA = { none: 'no_brim', outer: 'outer_only', auto: 'auto_brim', ears: 'brim_ears' } as const;
 const BRIM_FROM_ORCA: Record<string, keyof typeof BRIM_TO_ORCA> = Object.fromEntries(
@@ -294,14 +301,22 @@ export function isCompatible(settings: Json, machine: { name: string; systemPrin
 
 /**
  * Builds the three JSON documents the Orca CLI accepts: the machine keeps `inherits` = its
- * system printer, and process/filament declare compatibility with both names.
+ * system printer, and process/filament declare compatibility with both names. The bed type
+ * picks the filament's plate temperature.
  */
-export function cliProfiles(machine: { name: string; settings: Json; systemPrinter: string }, process: Json, filament: Json) {
+export function cliProfiles(
+  machine: { name: string; settings: Json; systemPrinter: string },
+  process: Json,
+  filament: Json,
+  bedType?: string,
+) {
   const compat = [machine.name, machine.systemPrinter];
   const forCli = (s: Json) => ({ ...s, compatible_printers: compat, compatible_printers_condition: '', compatible_prints: [], compatible_prints_condition: '' });
+  // The plate is a GUI/project setting; without it the CLI slices for the Cool Plate.
+  const plate = bedType ? { curr_bed_type: bedType } : {};
   return {
-    machine: { ...machine.settings, name: machine.name, inherits: machine.systemPrinter },
-    process: forCli(process),
+    machine: { ...machine.settings, name: machine.name, inherits: machine.systemPrinter, ...plate },
+    process: { ...forCli(process), ...plate },
     filament: forCli(filament),
   };
 }

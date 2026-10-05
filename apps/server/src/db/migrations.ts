@@ -162,4 +162,11 @@ export const migrations: string[] = [
   );
   CREATE UNIQUE INDEX push_subscriptions_endpoint_idx ON push_subscriptions (endpoint);
   `,
+  `
+  -- Bed type per printer/job, manual orientation and placement of parts.
+  ALTER TABLE printers ADD COLUMN bed_type TEXT;
+  ALTER TABLE jobs ADD COLUMN bed_type TEXT;
+  ALTER TABLE jobs ADD COLUMN arrange INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE job_models ADD COLUMN transform TEXT;
+  `,
 ];

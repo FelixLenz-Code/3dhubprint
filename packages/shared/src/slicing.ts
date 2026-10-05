@@ -21,17 +21,37 @@ export interface ProfileImportResult {
   skipped: { file: string; reason: string }[];
 }
 
+/**
+ * OrcaSlicer bed types (`curr_bed_type`). The bed temperature comes from the filament setting
+ * of the chosen plate; the CLI would otherwise always use the Cool Plate values.
+ */
+export const BED_TYPES = {
+  'High Temp Plate': { label: 'Glatte PEI-Platte (High Temp)', temp: 'hot_plate_temp' },
+  'Textured PEI Plate': { label: 'Texturierte PEI-Platte', temp: 'textured_plate_temp' },
+  'Cool Plate': { label: 'Cool Plate', temp: 'cool_plate_temp' },
+  'Engineering Plate': { label: 'Engineering Plate', temp: 'eng_plate_temp' },
+  'Textured Cool Plate': { label: 'Texturierte Cool Plate', temp: 'textured_cool_plate_temp' },
+  'Supertack Plate': { label: 'Supertack Plate', temp: 'supertack_plate_temp' },
+} as const;
+export type BedType = keyof typeof BED_TYPES;
+export const bedTypeSchema = z.enum(Object.keys(BED_TYPES) as [BedType, ...BedType[]]);
+/** Used when neither the printer nor its machine profile names a plate (OrcaSlicer's usual choice). */
+export const FALLBACK_BED_TYPE: BedType = 'High Temp Plate';
+
 export interface PrinterProfileAssignment {
   printerId: number;
   machine: string | null;
   process: string[];
   filament: string[];
+  /** Plate on the printer; null = the machine profile's default. */
+  bedType: BedType | null;
 }
 
 export const assignmentSchema = z.object({
   machine: z.string().min(1).max(256).nullable(),
   process: z.array(z.string().min(1).max(256)).max(200),
   filament: z.array(z.string().min(1).max(256)).max(200),
+  bedType: bedTypeSchema.nullable().optional(),
 });
 
 export interface SlicerStatus {
@@ -104,12 +124,29 @@ export const sliceOverridesSchema = z
   .strict();
 export type SliceOverrides = z.infer<typeof sliceOverridesSchema>;
 
+/**
+ * Manual orientation/placement of one model on the plate. Rotation and scale are applied
+ * around the model's bounding-box center (Z up); Orca then drops the part onto the bed.
+ */
+export const modelTransformSchema = z
+  .object({
+    /** Unit quaternion [x, y, z, w]. */
+    rotation: z.tuple([z.number(), z.number(), z.number(), z.number()]).default([0, 0, 0, 1]),
+    /** Uniform scale, e.g. 25.4 for a model drawn in inches. */
+    scale: z.number().min(0.001).max(10000).default(1),
+    /** Bed XY of each copy's bounding-box center; only used when the plate is not auto-arranged. */
+    positions: z.array(z.tuple([z.number(), z.number()])).max(50).optional(),
+  })
+  .strict();
+export type ModelTransform = z.infer<typeof modelTransformSchema>;
+
 export interface JobModel {
   id: number;
   name: string;
   thumbnailUrl: string;
   dimensions: [number, number, number];
   copies: number;
+  transform: ModelTransform | null;
 }
 
 export interface JobInfo {
@@ -125,6 +162,9 @@ export interface JobInfo {
   copies: number;
   autoOrient: boolean;
   autoPrint: boolean;
+  /** false = parts were placed manually. */
+  arrange: boolean;
+  bedType: BedType | null;
   error: string | null;
   gcodeName: string | null;
   printerPath: string | null;
@@ -153,7 +193,13 @@ export const createJobSchema = z
   .object({
     /** Models to place on one plate; Orca arranges them automatically. */
     items: z
-      .array(z.object({ modelId: z.number().int().positive(), copies: z.number().int().min(1).max(50).default(1) }))
+      .array(
+        z.object({
+          modelId: z.number().int().positive(),
+          copies: z.number().int().min(1).max(50).default(1),
+          transform: modelTransformSchema.optional(),
+        }),
+      )
       .min(1, 'Mindestens ein Modell wählen')
       .max(20, 'Höchstens 20 verschiedene Modelle pro Auftrag'),
     printerId: z.number().int().positive(),
@@ -161,11 +207,19 @@ export const createJobSchema = z
     filament: z.string().min(1).max(256),
     autoOrient: z.boolean().default(false),
     autoPrint: z.boolean().default(false),
+    /** false: keep the positions given per model instead of letting Orca arrange the plate. */
+    arrange: z.boolean().default(true),
+    /** Default: the printer's plate. */
+    bedType: bedTypeSchema.optional(),
     overrides: sliceOverridesSchema.default({}),
     note: z.string().trim().max(500).optional(),
   })
   .refine((j) => new Set(j.items.map((i) => i.modelId)).size === j.items.length, 'Jedes Modell nur einmal auswählen (Stückzahl stattdessen erhöhen)')
   .refine((j) => j.items.reduce((n, i) => n + i.copies, 0) <= MAX_PLATE_OBJECTS, `Höchstens ${MAX_PLATE_OBJECTS} Objekte pro Druckbett`)
+  .refine(
+    (j) => j.arrange || j.items.every((i) => i.transform?.positions?.length === i.copies),
+    'Ohne automatische Anordnung braucht jedes Objekt eine Position',
+  )
   .refine((j) => !j.overrides.vase || (j.items.length === 1 && j.items[0]!.copies === 1), 'Der Vasenmodus funktioniert nur mit genau einem Objekt');
 export type CreateJobInput = z.input<typeof createJobSchema>;
 

@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, Check } from 'lucide-react';
 import clsx from 'clsx';
-import type { JobInfo, ModelInfo, PrinterProfileAssignment, SliceOverrides, SlicerProfileInfo } from '@printhub/shared';
+import type { BedType, JobInfo, ModelInfo, PrinterProfileAssignment, SliceOverrides, SlicerProfileInfo } from '@printhub/shared';
 import { api } from '../lib/api';
 import { useAction } from '../lib/feedback';
 import { formatDims } from '../lib/jobs';
 import { live, useLive } from '../lib/live';
-import { allowedProfiles } from '../lib/profiles';
-import { Alert, Button, Card, Field, Input } from '../components/ui';
+import { allowedProfiles, effectiveBedType } from '../lib/profiles';
+import { OVERHANG_WARN_MM2, type Bed, type PlateReport } from '../lib/plate';
+import { Alert, Button, Card, Field, Input, Spinner } from '../components/ui';
 import { ModelPicker, type PlateItem } from '../components/slicing/ModelPicker';
-import { ProfileSelect, describeFilament, describeProcess } from '../components/slicing/ProfileSelect';
+import { BedTypeSelect, ProfileSelect, describeFilament, describeProcess } from '../components/slicing/ProfileSelect';
+
+// three.js is large: only load it when the plate is shown.
+const PlateEditor = lazy(() => import('../components/slicing/PlateEditor'));
 import { SliceOptions } from '../components/slicing/SliceOptions';
 
 /** All printers' profile assignments (for printer cards and profile filtering). */
@@ -53,6 +57,9 @@ export function NewJobPage() {
   const [overrides, setOverrides] = useState<SliceOverrides>({});
   const [autoOrient, setAutoOrient] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
+  const [arrange, setArrange] = useState(true);
+  const [bedType, setBedType] = useState<BedType | null>(null);
+  const [report, setReport] = useState<PlateReport>({ blocking: null, overhangs: null });
   const [note, setNote] = useState('');
   const { busy, run } = useAction();
 
@@ -63,6 +70,12 @@ export function NewJobPage() {
   const objectCount = items.reduce((n, i) => n + i.copies, 0);
   const chosenModels = useMemo(() => items.map((i) => models.data?.find((m) => m.id === i.modelId)).filter((m): m is ModelInfo => !!m), [items, models.data]);
   const tooBig = oversized(chosenModels, machine);
+  const plate = effectiveBedType(assignment, machine);
+  const bed = useMemo(() => bedOf(machine), [machine]);
+  const process = processes.find((p) => p.name === proc);
+  const supportOn = overrides.support?.enabled ?? !!process?.summary.support;
+  const supportAngle = overrides.support?.angle || Number(process?.summary.supportAngle) || 30;
+  const overhanging = [...(report.overhangs ?? [])].filter(([, area]) => area >= OVERHANG_WARN_MM2);
 
   // Vase mode needs exactly one object; drop it when the plate changes.
   useEffect(() => {
@@ -73,18 +86,34 @@ export function NewJobPage() {
     setPrinterId(id);
     setProc('');
     setFil('');
+    setBedType(null);
   };
 
   const submit = () =>
     run('create', async () => {
       const job = await api<JobInfo>('/jobs', {
-        body: { items, printerId, process: proc, filament: fil, autoOrient, autoPrint, overrides, note: note || undefined },
+        body: {
+          // Positions only matter for a manually arranged plate.
+          items: items.map(({ transform, ...i }) => ({
+            ...i,
+            ...(transform && { transform: arrange ? { rotation: transform.rotation, scale: transform.scale } : transform }),
+          })),
+          printerId,
+          process: proc,
+          filament: fil,
+          autoOrient,
+          autoPrint,
+          arrange,
+          bedType: bedType ?? plate,
+          overrides,
+          note: note || undefined,
+        },
       });
       live.upsertJob(job);
       navigate('/jobs');
     });
 
-  const ready = items.length > 0 && printerId && proc && fil;
+  const ready = items.length > 0 && printerId && proc && fil && !report.blocking;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -139,16 +168,57 @@ export function NewJobPage() {
         )}
       </Step>
 
-      <Step n={3} title="Profile & Optionen">
+      {printerId && bed && items.length > 0 && (
+        <Step n={3} title="Druckbett">
+          <Suspense fallback={<Spinner />}>
+            <PlateEditor
+              items={items}
+              onChange={setItems}
+              models={new Map(chosenModels.map((m) => [m.id, m]))}
+              bed={bed}
+              arrange={arrange}
+              onArrangeChange={setArrange}
+              autoOrient={autoOrient}
+              supportAngle={supportAngle}
+              onReport={setReport}
+            />
+          </Suspense>
+        </Step>
+      )}
+
+      <Step n={printerId && bed && items.length > 0 ? 4 : 3} title="Profile & Optionen">
         {!printerId ? (
           <p className="text-sm text-text-3">Zuerst einen Drucker wählen.</p>
         ) : (
           <div className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2">
               <ProfileSelect label="Prozess (Qualität)" profiles={processes} value={proc} onChange={setProc} describe={describeProcess} />
-              <ProfileSelect label="Filament" profiles={filaments} value={fil} onChange={setFil} describe={describeFilament} />
+              <div className="space-y-4">
+                <Field label="Druckplatte" hint="Bestimmt die Betttemperatur aus dem Filamentprofil">
+                  <BedTypeSelect value={bedType ?? plate} onChange={setBedType} />
+                </Field>
+                <ProfileSelect label="Filament" profiles={filaments} value={fil} onChange={setFil} describe={(p) => describeFilament(p, bedType ?? plate)} />
+              </div>
             </div>
-            <SliceOptions value={overrides} onChange={setOverrides} process={processes.find((p) => p.name === proc)} objectCount={objectCount} />
+            {overhanging.length > 0 && !supportOn && (
+              <Alert tone="warning">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="min-w-0 flex-1">
+                    <AlertTriangle className="mr-1 inline size-4" />
+                    Überhänge ohne Stützen:{' '}
+                    {overhanging.map(([id, area]) => `${chosenModels.find((m) => m.id === id)?.name ?? 'Modell'} (≈ ${Math.max(1, Math.round(area / 100))} cm²)`).join(', ')}.
+                    Diese Stellen (rot auf dem Druckbett) würden in die Luft gedruckt. Anders hinlegen oder Stützen aktivieren.
+                  </span>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setOverrides({ ...overrides, support: { enabled: true, type: 'tree', buildPlateOnly: false, ...(overrides.support?.angle && { angle: overrides.support.angle }) } })}
+                  >
+                    Stützen aktivieren
+                  </Button>
+                </div>
+              </Alert>
+            )}
+            <SliceOptions value={overrides} onChange={setOverrides} process={process} objectCount={objectCount} />
             <Field label="Notiz (optional)">
               <Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="z. B. für wen, Farbe…" />
             </Field>
@@ -167,17 +237,27 @@ export function NewJobPage() {
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         {items.length > 0 && <span className="mr-auto text-sm text-text-2">
-            {objectCount === 1 ? '1 Objekt' : `${objectCount} Objekte werden von OrcaSlicer auf dem Bett verteilt.`}
+            {objectCount === 1 ? '1 Objekt' : arrange ? `${objectCount} Objekte werden von OrcaSlicer auf dem Bett verteilt.` : `${objectCount} Objekte, von Hand platziert.`}
           </span>}
         <Link to="/jobs">
           <Button variant="ghost">Abbrechen</Button>
         </Link>
+        {report.blocking && <span className="text-sm text-critical">{report.blocking}</span>}
         <Button onClick={submit} disabled={!ready} loading={busy === 'create'}>
           Auftrag anlegen & slicen
         </Button>
       </div>
     </div>
   );
+}
+
+function bedOf(machine: SlicerProfileInfo | undefined): Bed | null {
+  const s = machine?.summary;
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const width = n(s?.bedX);
+  const depth = n(s?.bedY);
+  if (!width || !depth) return null;
+  return { x0: n(s?.bedX0) ?? 0, y0: n(s?.bedY0) ?? 0, width, depth, height: n(s?.height) ?? 250 };
 }
 
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {

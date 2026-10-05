@@ -50,6 +50,13 @@ export async function slicerRoutes(
     return reply.send(fs.createReadStream(file));
   });
 
+  /** Display mesh for the plate editor: little-endian float32, 9 per triangle (decimated). */
+  app.get('/models/:id/mesh', async (req, reply) => {
+    const file = await slicing.displayMesh(idParams.parse(req.params).id);
+    reply.header('content-type', 'application/octet-stream').header('cache-control', 'private, max-age=86400');
+    return reply.send(fs.createReadStream(file));
+  });
+
   app.get('/jobs/:id/preview/:view', async (req, reply) => {
     const { id } = idParams.parse(req.params);
     const { view } = z.object({ view: z.enum(['top', 'iso']) }).parse(req.params);

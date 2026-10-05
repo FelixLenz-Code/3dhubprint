@@ -28,6 +28,10 @@ pnpm --filter @printhub/server licenses list --prod
 pnpm --filter @printhub/web licenses list --prod
 ```
 
+## three.js
+
+Der 3D-Druckbett-Editor nutzt three.js (https://threejs.org), MIT-Lizenz.
+
 ## Klipper und Moonraker
 
 PrintHub enthält keinen Code aus Klipper oder Moonraker (beide GPL-3.0), sondern kommuniziert

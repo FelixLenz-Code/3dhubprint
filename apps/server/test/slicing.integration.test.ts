@@ -49,6 +49,15 @@ function cubeStl(size = 20): Buffer {
   return buf;
 }
 
+function boxStl(x: number, y: number, z: number): Buffer {
+  const buf = cubeStl(1);
+  for (let i = 0; i < 12 * 9; i++) {
+    const o = 84 + Math.floor(i / 9) * 50 + 12 + (i % 9) * 4;
+    buf.writeFloatLE(buf.readFloatLE(o) * [x, y, z][i % 3]!, o);
+  }
+  return buf;
+}
+
 const profileForm = (files: string[]) => {
   const form = new FormData();
   for (const f of files) form.append('files', new Blob([new Uint8Array(fs.readFileSync(f))]), path.basename(f));
@@ -276,6 +285,81 @@ describe('models and jobs', () => {
     });
     const gcode = (await api(`/api/jobs/${job.id}/gcode`)).body.toString();
     for (const line of ['; spiral_mode = 1', '; wall_loops = 1', '; sparse_infill_density = 0%', '; enable_support = 0']) expect(gcode).toContain(line);
+  });
+
+  it('slices for the printer\'s plate (bed type) and rejects plates the filament does not support', async () => {
+    const body = { items: [{ modelId }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA' };
+    const slice = async (extra: object = {}) => {
+      const r = await api('/api/jobs', { body: { ...body, ...extra } });
+      expect(r.status).toBe(201);
+      const job = await until(async () => {
+        const j = (await api(`/api/jobs/${r.body.id}`)).body as JobInfo;
+        return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+      });
+      return { job, gcode: (await api(`/api/jobs/${job.id}/gcode`)).body.toString() as string };
+    };
+    // Without a printer setting: OrcaSlicer's usual High Temp Plate, never the CLI's Cool Plate default.
+    let res = await slice();
+    expect(res.job.bedType).toBe('High Temp Plate');
+    expect(res.gcode).toContain('; curr_bed_type = High Temp Plate / High Temp Plate');
+
+    const set = await api(`/api/printers/${printerId}/profiles`, {
+      method: 'PUT',
+      body: { machine: 'Tuned (Claude) - Ender-3 S1 Plus 0.4', process: [], filament: [], bedType: 'Textured PEI Plate' },
+    });
+    expect(set.body.bedType).toBe('Textured PEI Plate');
+    res = await slice();
+    expect(res.gcode).toContain('; curr_bed_type = Textured PEI Plate');
+    res = await slice({ bedType: 'Cool Plate' });
+    expect(res.gcode).toContain('; curr_bed_type = Cool Plate');
+
+    // The PETG profile has eng_plate_temp = 0, i.e. not for the Engineering Plate.
+    const bad = await api('/api/jobs', { body: { ...body, filament: 'Tuned (Claude) - PETG', bedType: 'Engineering Plate' } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.message).toContain('Engineering Plate');
+  });
+
+  it('bakes manual orientation, scale and bed positions into the parts', async () => {
+    const f = new FormData();
+    f.append('file', new Blob([new Uint8Array(boxStl(30, 10, 5))]), 'Leiste.stl');
+    const bar = (await api('/api/models', { form: f })).body.id;
+    const mesh = await api(`/api/models/${bar}/mesh`);
+    expect(mesh.body.length).toBe(12 * 9 * 4);
+
+    const zQuarter = [0, 0, Math.SQRT1_2, Math.SQRT1_2]; // 90° about Z
+    const body = { printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA' };
+    const outside = await api('/api/jobs', {
+      body: { ...body, arrange: false, items: [{ modelId: bar, copies: 1, transform: { rotation: zQuarter, scale: 2, positions: [[-50, 20]] } }] },
+    });
+    expect(outside.status).toBe(400);
+    const missing = await api('/api/jobs', { body: { ...body, arrange: false, items: [{ modelId: bar, copies: 2, transform: { positions: [[50, 50]] } }] } });
+    expect(missing.status).toBe(400);
+
+    const r = await api('/api/jobs', {
+      body: { ...body, arrange: false, items: [{ modelId: bar, copies: 2, transform: { rotation: zQuarter, scale: 2, positions: [[50, 60], [200, 210]] } }] },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body).toMatchObject({ arrange: false });
+    expect(r.body.models[0].transform).toMatchObject({ scale: 2, positions: [[50, 60], [200, 210]] });
+    const job = await until(async () => {
+      const j = (await api(`/api/jobs/${r.body.id}`)).body as JobInfo;
+      return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+    });
+    expect(job.error).toBeNull();
+    const gcode = (await api(`/api/jobs/${job.id}/gcode`)).body.toString();
+    expect(gcode).toContain('; arrange = 0');
+    // 30×10×5 scaled ×2 and turned 90°: 20×60×10, centered at the given positions, on the bed.
+    expect(gcode).toContain('; bounds = 40,30,0,60,90,10 | 190,180,0,210,240,10');
+
+    // Auto-arranged: rotation/scale are baked in, Orca places the part.
+    const auto = await api('/api/jobs', { body: { ...body, items: [{ modelId: bar, transform: { rotation: zQuarter, scale: 1 } }] } });
+    const job2 = await until(async () => {
+      const j = (await api(`/api/jobs/${auto.body.id}`)).body as JobInfo;
+      return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+    });
+    const gcode2 = (await api(`/api/jobs/${job2.id}/gcode`)).body.toString();
+    expect(gcode2).toContain('; arrange = 1');
+    expect(gcode2).toContain('; bounds = -5,-15,0,5,15,5');
   });
 
   it('protects models that are still used by jobs', async () => {

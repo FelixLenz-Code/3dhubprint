@@ -2,7 +2,7 @@ import { useRef, useState, type DragEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Box, Check, Minus, Plus, Trash2, Upload, X } from 'lucide-react';
 import clsx from 'clsx';
-import type { ModelInfo } from '@printhub/shared';
+import type { ModelInfo, ModelTransform } from '@printhub/shared';
 import { api, uploadWithProgress } from '../../lib/api';
 import { confirm, toast, useAction } from '../../lib/feedback';
 import { formatDims } from '../../lib/jobs';
@@ -12,6 +12,8 @@ import { Button, Input, ProgressBar, Spinner } from '../ui';
 export interface PlateItem {
   modelId: number;
   copies: number;
+  /** Set in the plate editor (orientation, scale, positions). */
+  transform?: ModelTransform;
 }
 
 const MODEL_EXT = /\.(stl|3mf|obj)$/i;
@@ -66,7 +68,13 @@ export function ModelPicker({
                   <img src={m.thumbnailUrl} alt="" className="size-10 shrink-0 rounded-md bg-surface-2 object-contain" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{m.name}</div>
-                    <div className="tabular text-xs text-text-3">{formatDims(m.dimensions)}</div>
+                    <div className="tabular text-xs text-text-3">
+                      {formatDims(m.dimensions)}
+                      {v.transform && v.transform.scale !== 1 && ` · ${Math.round(v.transform.scale * 1000) / 10} %`}
+                    </div>
+                    {Math.max(...m.dimensions) < 5 && (v.transform?.scale ?? 1) === 1 && (
+                      <div className="text-xs text-warning">Sehr klein: evtl. in Zoll/cm gezeichnet, auf dem Druckbett skalieren</div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
                     <Button variant="secondary" className="size-8 min-h-8 px-0" onClick={() => setCopies(v.modelId, v.copies - 1)} aria-label="Weniger">

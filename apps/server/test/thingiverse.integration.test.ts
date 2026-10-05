@@ -29,6 +29,12 @@ const fake = http.createServer((req, res) => {
     return res.end(url.pathname.endsWith('.zip') ? Buffer.from(zipSync({ 'teile/a.stl': new Uint8Array(stl(10)), 'teile/b.stl': new Uint8Array(stl(20)), 'liesmich.txt': new Uint8Array([65]) })) : stl(30));
   }
   if (req.headers.authorization !== `Bearer ${TOKEN}`) return json(401, { error: 'Unauthorized' });
+  if (url.pathname === '/featured/') {
+    return json(200, [{ id: 7, name: 'Featured Ding', creator: { name: 'Ben' }, like_count: 1 }]);
+  }
+  // Suggestions: a search without a term only knows "popular"; "newest" falls back to /newest/.
+  if (url.pathname === '/search/' && url.searchParams.get('sort') !== 'popular') return json(404, { error: 'not found' });
+  if (url.pathname === '/newest/') return json(200, [{ id: 8, name: 'Neues Ding' }]);
   if (url.pathname.startsWith('/search/')) {
     return json(200, {
       total: 2,
@@ -116,6 +122,17 @@ describe('Thingiverse', () => {
         url: 'https://www.thingiverse.com/thing:1',
       },
     ]);
+  });
+
+  it('suggests things without a search term, with fallback to the classic lists', async () => {
+    const popular = await api<ThingSearchPage>('/api/thingiverse/suggestions?list=popular');
+    expect(popular.status).toBe(200);
+    expect(popular.body.hits.map((h) => h.name)).toEqual(['Halter']);
+    const newest = await api<ThingSearchPage>('/api/thingiverse/suggestions?list=newest');
+    expect(newest.body.hits.map((h) => h.name)).toEqual(['Neues Ding']);
+    const featured = await api<ThingSearchPage>('/api/thingiverse/suggestions?list=featured&page=2');
+    expect(featured.body).toMatchObject({ page: 2, total: 25, hits: [{ id: 7, name: 'Featured Ding', creator: 'Ben' }] });
+    expect((await api('/api/thingiverse/suggestions?list=nonsense')).status).toBe(400);
   });
 
   it('shows details with license and marks importable files', async () => {

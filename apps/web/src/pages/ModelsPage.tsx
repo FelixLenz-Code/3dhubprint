@@ -5,10 +5,12 @@ import { Box, Check, Download, ExternalLink, Heart, Search, Trash2, Upload } fro
 import clsx from 'clsx';
 import {
   THINGIVERSE_SORTS,
+  THINGIVERSE_SUGGESTIONS,
   type ModelInfo,
   type ThingDetails,
   type ThingSearchPage,
   type ThingiverseSort,
+  type ThingiverseSuggestion,
   type ThingiverseStatus,
 } from '@printhub/shared';
 import { api } from '../lib/api';
@@ -191,14 +193,22 @@ function ThingiverseSearch() {
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<ThingiverseSort>('relevant');
+  const [suggest, setSuggest] = useState<ThingiverseSuggestion>('popular');
   const [open, setOpen] = useState<number>();
 
+  // Without a search term, show suggestions (popular, newest, featured).
   const results = useInfiniteQuery({
-    queryKey: ['thingiverse', query, sort],
-    queryFn: ({ pageParam }) => api<ThingSearchPage>(`/thingiverse/search?q=${encodeURIComponent(query)}&sort=${sort}&page=${pageParam}`),
+    queryKey: query ? ['thingiverse', query, sort] : ['thingiverse-suggest', suggest],
+    queryFn: ({ pageParam }) =>
+      api<ThingSearchPage>(
+        query
+          ? `/thingiverse/search?q=${encodeURIComponent(query)}&sort=${sort}&page=${pageParam}`
+          : `/thingiverse/suggestions?list=${suggest}&page=${pageParam}`,
+      ),
     initialPageParam: 1,
     getNextPageParam: (last, pages) => (pages.reduce((n, p) => n + p.hits.length, 0) < last.total && last.hits.length ? last.page + 1 : undefined),
-    enabled: !!query && !!status.data?.configured,
+    enabled: !!status.data?.configured,
+    staleTime: 5 * 60_000,
   });
 
   if (status.isLoading) return <Spinner />;
@@ -242,13 +252,34 @@ function ThingiverseSearch() {
             </option>
           ))}
         </select>
-        <Button type="submit" disabled={!input.trim()}>
+        <Button type="submit" disabled={!input.trim() && !query}>
           Suchen
         </Button>
       </form>
 
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-sm text-text-2">{query ? 'Oder stöbern:' : 'Vorschläge:'}</span>
+        {(Object.keys(THINGIVERSE_SUGGESTIONS) as ThingiverseSuggestion[]).map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => {
+              setSuggest(k);
+              setQuery('');
+              setInput('');
+            }}
+            className={clsx(
+              'rounded-full border px-3 py-1 text-sm',
+              !query && suggest === k ? 'border-accent bg-accent/10 text-text' : 'border-border text-text-2 hover:border-text-3',
+            )}
+          >
+            {THINGIVERSE_SUGGESTIONS[k]}
+          </button>
+        ))}
+      </div>
+
       {results.error && <Alert>{(results.error as Error).message}</Alert>}
-      {results.isLoading && query && <Spinner />}
+      {results.isLoading && <Spinner />}
       {results.data && !hits.length && <p className="text-sm text-text-3">Keine Treffer.</p>}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">

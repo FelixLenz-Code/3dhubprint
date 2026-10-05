@@ -58,6 +58,8 @@ export const printers = sqliteTable('printers', {
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   /** Confirmed empty by a user; cleared whenever a print starts. Gates the queue. */
   bedClear: integer('bed_clear', { mode: 'boolean' }).notNull().default(false),
+  /** Orca bed type (curr_bed_type) used for slicing; null = machine default. */
+  bedType: text('bed_type'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 });
@@ -157,6 +159,10 @@ export const jobs = sqliteTable('jobs', {
   note: text('note'),
   /** JSON: SliceOverrides */
   overrides: text('overrides').notNull().default('{}'),
+  /** Orca bed type the job was sliced for. */
+  bedType: text('bed_type'),
+  /** Let Orca arrange the parts; false = use the positions stored per model. */
+  arrange: integer('arrange', { mode: 'boolean' }).notNull().default(true),
   /** Position in the printer's queue while status = waiting. */
   queuePosition: integer('queue_position'),
   finishedAt: integer('finished_at'),
@@ -176,6 +182,8 @@ export const jobModels = sqliteTable(
       .references(() => models.id),
     copies: integer('copies').notNull().default(1),
     position: integer('position').notNull().default(0),
+    /** JSON: ModelTransform (rotation, scale, bed positions); null = as uploaded. */
+    transform: text('transform'),
   },
   (t) => [primaryKey({ columns: [t.jobId, t.modelId] })],
 );

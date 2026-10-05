@@ -26,12 +26,17 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
    Profile erhalten beim erneuten Import eine neue Version; Aufträge merken sich die genutzte.
 2. **Zuordnung:** Jedem Drucker ein Druckerprofil zuweisen. Prozess- und Filamentprofile sind
    automatisch auf die passenden beschränkt (`compatible_printers`), lassen sich aber auch
-   ausdrücklich freigeben.
+   ausdrücklich freigeben. Außerdem die **Druckplatte** (glatte/texturierte PEI, Cool Plate …):
+   Sie bestimmt, welche Betttemperatur aus dem Filamentprofil gilt.
 3. **Aufträge → Neuer Auftrag:** Ein oder mehrere Modelle hochladen bzw. aus der Bibliothek
    wählen (je mit Stückzahl, OrcaSlicer verteilt alles auf dem Bett), Drucker, Qualität,
    Filament und bei Bedarf Abweichungen vom Profil: Stützen (Baum/Normal, nur auf dem Bett,
    Überhangwinkel), Brim, Skirt und Vasenmodus. Nach dem Slicen: *Drucken*, *Nur übertragen*
    oder G-Code herunterladen.
+   Im **3D-Druckbett** lassen sich Teile drehen (90°-Schritte oder „Fläche aufs Bett legen“),
+   skalieren (auch Einheiten-Umrechnung für Modelle in Zoll/cm/m) und, mit ausgeschaltetem
+   „Automatisch anordnen“, frei auf dem Bett verschieben. Überhänge, die ohne Stützen in die Luft
+   gedruckt würden, werden rot markiert; dann schlägt PrintHub vor, Stützen zu aktivieren.
 4. **Schnelldruck** auf jeder Druckerseite: Modelle hochladen → Druckdauer, Filament und
    Materialkosten ansehen → *Drucken*. Vorbelegt mit den zuletzt genutzten Profilen.
 
@@ -41,7 +46,7 @@ Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in de
 ## Modelle & Thingiverse
 
 Unter **Modelle** liegt die Bibliothek (Suche, Download, Mehrfachauswahl → „Auftrag anlegen“).
-Der Tab **Thingiverse** durchsucht thingiverse.com, zeigt Bilder, Lizenz, Urheber und Dateien
+Der Tab **Thingiverse** zeigt Vorschläge (beliebt, neu, empfohlen), durchsucht thingiverse.com, zeigt Bilder, Lizenz, Urheber und Dateien
 und übernimmt ausgewählte Dateien (STL/3MF/OBJ, ZIP-Archive werden entpackt) in die Bibliothek,
 inklusive Quelle, Lizenz und Urheber.
 
@@ -223,6 +228,12 @@ die CLI mit „printer is not compatible with the process preset“ (-17) ab.
 Im Container läuft die CLI ohne Display. Die AppImage wird beim Image-Build per `unsquashfs`
 entpackt (kein FUSE nötig) und per SHA-256 geprüft. Vorschaubilder erzeugt die CLI für
 STL-Eingaben nicht, daher rendert PrintHub sie selbst.
+
+Die Druckplatte (`curr_bed_type`) ist in OrcaSlicer eine GUI-/Projekteinstellung. Ohne sie slict
+die CLI immer für die Cool Plate und nimmt deren Betttemperatur. PrintHub setzt sie deshalb
+ausdrücklich. Mit `--arrange 0` behält die CLI die XY-Lage der Eingabedateien und legt die Teile
+nur aufs Bett. Darauf beruht die manuelle Platzierung: Drehung, Skalierung und Position
+werden in temporäre STL-Dateien eingerechnet.
 
 ## Lizenz
 

@@ -18,6 +18,8 @@ export interface SliceInput {
   /** Models placed on one plate; Orca arranges all instances. */
   models: { path: string; copies: number }[];
   autoOrient: boolean;
+  /** false: keep the parts' XY positions from the input files. */
+  arrange?: boolean;
   machine: Record<string, unknown>;
   process: Record<string, unknown>;
   filament: Record<string, unknown>;
@@ -38,7 +40,7 @@ export interface GcodeStats {
 
 const LOG_LIMIT = 64 * 1024;
 
-/** Runs the OrcaSlicer CLI on one model (optionally several copies, auto-arranged). */
+/** Runs the OrcaSlicer CLI on one plate of models (auto-arranged unless `arrange` is false). */
 export async function runOrca(bin: string, input: SliceInput, timeoutMs: number, signal?: AbortSignal): Promise<SliceOutput> {
   const { workDir } = input;
   const outDir = path.join(workDir, 'out');
@@ -49,7 +51,7 @@ export async function runOrca(bin: string, input: SliceInput, timeoutMs: number,
 
   const args = [
     '--slice', '0',
-    '--arrange', '1',
+    '--arrange', input.arrange === false ? '0' : '1',
     '--orient', input.autoOrient ? '1' : '0',
     '--load-settings', 'machine.json;process.json',
     '--load-filaments', 'filament.json',
@@ -109,10 +111,17 @@ export async function runOrca(bin: string, input: SliceInput, timeoutMs: number,
   }
   const gcodePath = path.join(outDir, 'plate_1.gcode');
   if (code !== 0 || (result.return_code ?? 0) !== 0 || !fs.existsSync(gcodePath)) {
-    const reason = result.error_string && result.error_string !== 'Success.' ? result.error_string : `Exit-Code ${code}`;
+    const reason = result.error_string && result.error_string !== 'Success.' ? explain(result.error_string) : `Exit-Code ${code}`;
     throw new SliceError(`Slicen fehlgeschlagen: ${reason}`, log);
   }
   return { gcodePath, log, stats: await readGcodeStats(gcodePath) };
+}
+
+/** Orca's messages are written for its GUI and 3MF projects; say what they mean here. */
+function explain(error: string): string {
+  if (/G-code conflicts detected/i.test(error)) return 'Teile kommen sich beim Drucken in die Quere (Überlappung). Bitte weiter auseinander platzieren.';
+  if (/outside|exceed.*(plate|bed)|beyond the plate/i.test(error)) return `Ein Teil liegt außerhalb des Druckbereichs (${error})`;
+  return error;
 }
 
 /** Parses Orca's summary comments from the start and end of the G-code. */

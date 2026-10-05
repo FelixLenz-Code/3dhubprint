@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { Readable } from 'node:stream';
 import { z } from 'zod';
-import { thingiverseImportSchema, thingiverseSearchSchema, thingiverseTokenSchema } from '@printhub/shared';
+import { thingiverseImportSchema, thingiverseSearchSchema, thingiverseSuggestSchema, thingiverseTokenSchema } from '@printhub/shared';
 import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
 import type { ThingiverseService } from './service.js';
@@ -16,6 +16,11 @@ export async function thingiverseRoutes(app: FastifyInstance, { tv, auth }: { tv
   app.get('/search', async (req) => {
     const q = thingiverseSearchSchema.parse(req.query);
     return tv.search(q.q, q.page, q.sort);
+  });
+
+  app.get('/suggestions', async (req) => {
+    const q = thingiverseSuggestSchema.parse(req.query);
+    return tv.suggestions(q.list, q.page);
   });
 
   app.get('/things/:id', async (req) => tv.details(idParams.parse(req.params).id));

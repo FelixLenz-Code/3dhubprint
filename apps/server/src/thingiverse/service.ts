@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { unzipSync } from 'fflate';
-import type { ModelInfo, ThingDetails, ThingFile, ThingSearchPage, ThingSummary, ThingiverseSort } from '@printhub/shared';
+import type { ModelInfo, ThingDetails, ThingFile, ThingSearchPage, ThingSummary, ThingiverseSort, ThingiverseSuggestion } from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { appSettings } from '../db/schema.js';
 import type { SecretBox } from '../crypto.js';
@@ -106,6 +106,31 @@ export class ThingiverseService {
       page,
       hits: (res.hits ?? []).filter((h) => !h.is_nsfw).map((h) => this.summary(h)),
     };
+  }
+
+  /**
+   * Things to browse without a search term. Thingiverse's website lists these via a search
+   * without a term; older API versions have /popular, /newest and /featured instead.
+   */
+  async suggestions(list: ThingiverseSuggestion, page: number): Promise<ThingSearchPage> {
+    const params = { type: 'things', page: String(page), per_page: String(PER_PAGE) };
+    if (list !== 'featured') {
+      try {
+        const res = await this.request<{ hits?: Json[]; total?: number }>('/search/', { ...params, sort: list });
+        if (Array.isArray(res.hits)) return this.page(res.hits, res.total ?? res.hits.length, page);
+      } catch (err) {
+        // Missing/invalid token or rate limit: the fallback would fail the same way.
+        if (!(err instanceof ThingiverseError) || [401, 409, 429].includes(err.status) || err.message.includes('Token')) throw err;
+      }
+    }
+    const res = await this.request<Json[] | { hits?: Json[] }>(`/${list}/`, params);
+    const hits = Array.isArray(res) ? res : (res.hits ?? []);
+    // These lists have no total: offer another page while pages come back full.
+    return this.page(hits, (page - 1) * PER_PAGE + hits.length + (hits.length >= PER_PAGE ? 1 : 0), page);
+  }
+
+  private page(hits: Json[], total: number, page: number): ThingSearchPage {
+    return { total, page, hits: hits.filter((h) => !h.is_nsfw).map((h) => this.summary(h)) };
   }
 
   async details(id: number): Promise<ThingDetails> {

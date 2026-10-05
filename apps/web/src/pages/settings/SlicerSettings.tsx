@@ -7,8 +7,8 @@ import { api, uploadWithProgress } from '../../lib/api';
 import { confirm, toast, useAction } from '../../lib/feedback';
 import { useLive } from '../../lib/live';
 import { Alert, Badge, Button, Card, Spinner } from '../../components/ui';
-import { describeFilament, describeProcess } from '../../components/slicing/ProfileSelect';
-import { isCompatible } from '../../lib/profiles';
+import { BedTypeSelect, describeFilament, describeProcess } from '../../components/slicing/ProfileSelect';
+import { effectiveBedType, isCompatible } from '../../lib/profiles';
 
 const KIND_LABEL: Record<ProfileKind, string> = { machine: 'Drucker', process: 'Prozesse', filament: 'Filamente' };
 
@@ -222,7 +222,7 @@ function AssignmentEditor({ printer, profiles }: { printer: PrinterSummary; prof
       async () => {
         const res = await api<PrinterProfileAssignment>(`/printers/${printer.id}/profiles`, {
           method: 'PUT',
-          body: { machine: draft.machine, process: draft.process, filament: draft.filament },
+          body: { machine: draft.machine, process: draft.process, filament: draft.filament, bedType: draft.bedType },
         });
         qc.setQueryData(['assignment', printer.id], res);
         await qc.invalidateQueries({ queryKey: ['assignments'] });
@@ -248,6 +248,17 @@ function AssignmentEditor({ printer, profiles }: { printer: PrinterSummary; prof
           ))}
         </select>
       </div>
+      {draft.machine && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <span className="text-sm text-text-2 sm:w-40 sm:shrink-0">Druckplatte</span>
+          <BedTypeSelect
+            value={effectiveBedType(draft, machine)}
+            onChange={(bedType) => setDraft({ ...draft, bedType })}
+            label={`Druckplatte für ${printer.name}`}
+            className="sm:flex-1"
+          />
+        </div>
+      )}
       {draft.machine && (
         <div className="grid gap-4 sm:grid-cols-2">
           {(['process', 'filament'] as const).map((kind) => {

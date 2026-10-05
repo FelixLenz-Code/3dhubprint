@@ -5,9 +5,11 @@ import path from 'node:path';
 import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type {
+  BedType,
   CreateJobInput,
   JobInfo,
   JobModel,
+  ModelTransform,
   SliceOverrides,
   ModelInfo,
   PrinterProfileAssignment,
@@ -16,7 +18,7 @@ import type {
   SlicerProfileInfo,
   SlicerStatus,
 } from '@printhub/shared';
-import { createJobSchema } from '@printhub/shared';
+import { BED_TYPES, FALLBACK_BED_TYPE, bedTypeSchema, createJobSchema } from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { jobModels, jobs, models, printerProfiles, printers, slicerProfiles } from '../db/schema.js';
 import type { PrinterManager } from '../printers/manager.js';
@@ -34,9 +36,10 @@ import {
   summarize,
   type UploadedPreset,
 } from './profiles.js';
-import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail } from './mesh.js';
+import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail, type Mesh } from './mesh.js';
 import { SliceError, injectThumbnails, runOrca, thumbnailSizes } from './orca.js';
 import { bedFromSettings, renderPlatePreviewOffThread } from './gcodePreview.js';
+import { isIdentity, simplifyForDisplay, transformMesh, writeStl } from './transform.js';
 
 export class SlicingError extends Error {
   constructor(
@@ -71,6 +74,8 @@ export interface SlicingConfig {
 
 const KINDS: ProfileKind[] = ['machine', 'process', 'filament'];
 const MODEL_THUMB_SIZE = 512;
+/** Enough detail for orienting a part in the browser, small enough for phones. */
+const DISPLAY_TRIANGLES = 150_000;
 
 export class SlicingService extends EventEmitter<Events> {
   private system?: SystemProfiles;
@@ -79,7 +84,7 @@ export class SlicingService extends EventEmitter<Events> {
   private stopped = false;
   private loopDone?: Promise<void>;
   private starting = new Set<number>();
-  private readonly dirs: Record<'models' | 'thumbs' | 'gcode' | 'work' | 'previews', string>;
+  private readonly dirs: Record<'models' | 'thumbs' | 'gcode' | 'work' | 'previews' | 'meshes', string>;
 
   constructor(
     private readonly db: Db,
@@ -95,6 +100,7 @@ export class SlicingService extends EventEmitter<Events> {
       gcode: path.join(cfg.dataDir, 'gcode'),
       work: path.join(cfg.dataDir, 'slicing'),
       previews: path.join(cfg.dataDir, 'previews'),
+      meshes: path.join(cfg.dataDir, 'meshes'),
     };
     for (const d of Object.values(this.dirs)) fs.mkdirSync(d, { recursive: true });
   }
@@ -216,10 +222,19 @@ export class SlicingService extends EventEmitter<Events> {
       machine: rows.find((r) => r.kind === 'machine')?.profileName ?? null,
       process: rows.filter((r) => r.kind === 'process').map((r) => r.profileName).sort(),
       filament: rows.filter((r) => r.kind === 'filament').map((r) => r.profileName).sort(),
+      bedType: this.printerBedType(printerId),
     };
   }
 
-  setAssignment(printerId: number, a: Omit<PrinterProfileAssignment, 'printerId'>): PrinterProfileAssignment {
+  private printerBedType(printerId: number): BedType | null {
+    const raw = this.db.select({ b: printers.bedType }).from(printers).where(eq(printers.id, printerId)).get()?.b;
+    return bedTypeSchema.safeParse(raw).success ? (raw as BedType) : null;
+  }
+
+  setAssignment(
+    printerId: number,
+    a: Omit<PrinterProfileAssignment, 'printerId' | 'bedType'> & { bedType?: BedType | null },
+  ): PrinterProfileAssignment {
     if (!this.db.select({ id: printers.id }).from(printers).where(eq(printers.id, printerId)).get()) {
       throw new SlicingError('Drucker nicht gefunden', 404);
     }
@@ -237,6 +252,7 @@ export class SlicingService extends EventEmitter<Events> {
         ...[...new Set(a.filament)].map((profileName) => ({ printerId, kind: 'filament' as const, profileName })),
       ];
       if (rows.length) tx.insert(printerProfiles).values(rows).run();
+      if (a.bedType !== undefined) tx.update(printers).set({ bedType: a.bedType }).where(eq(printers.id, printerId)).run();
     });
     return this.getAssignment(printerId);
   }
@@ -306,6 +322,7 @@ export class SlicingService extends EventEmitter<Events> {
       .returning()
       .get();
     await fs.promises.writeFile(this.thumbPath(row.id), renderThumbnail(mesh, MODEL_THUMB_SIZE));
+    await this.writeDisplayMesh(row.id, mesh);
     return this.toModelInfo(row);
   }
 
@@ -333,6 +350,28 @@ export class SlicingService extends EventEmitter<Events> {
     this.db.delete(models).where(eq(models.id, id)).run();
     fs.rmSync(m.storedPath, { force: true });
     fs.rmSync(this.thumbPath(id), { force: true });
+    fs.rmSync(this.meshPath(id), { force: true });
+  }
+
+  private meshPath(modelId: number) {
+    return path.join(this.dirs.meshes, `model-${modelId}.bin`);
+  }
+
+  /** Decimated triangle soup for the browser's plate editor, cached on disk. */
+  async displayMesh(modelId: number): Promise<string> {
+    const file = this.meshPath(modelId);
+    if (fs.existsSync(file)) return file;
+    const m = this.getModelRow(modelId);
+    if (!m) throw new SlicingError('Modell nicht gefunden', 404);
+    await this.writeDisplayMesh(modelId, parseModel(m.format, await fs.promises.readFile(m.storedPath)));
+    return file;
+  }
+
+  private async writeDisplayMesh(modelId: number, mesh: Mesh) {
+    const t = simplifyForDisplay(mesh, DISPLAY_TRIANGLES).triangles;
+    const file = this.meshPath(modelId);
+    await fs.promises.writeFile(`${file}.tmp`, Buffer.from(t.buffer, t.byteOffset, t.byteLength));
+    await fs.promises.rename(`${file}.tmp`, file);
   }
 
   private toModelInfo(m: ModelRow): ModelInfo {
@@ -362,7 +401,7 @@ export class SlicingService extends EventEmitter<Events> {
     const items = b.items.map((it) => {
       const model = this.getModelRow(it.modelId);
       if (!model) throw new SlicingError(`Modell #${it.modelId} nicht gefunden`, 404);
-      return { model, copies: it.copies };
+      return { model, copies: it.copies, transform: it.transform };
     });
     const printer = this.db.select().from(printers).where(eq(printers.id, b.printerId)).get();
     if (!printer) throw new SlicingError('Drucker nicht gefunden', 404);
@@ -378,6 +417,10 @@ export class SlicingService extends EventEmitter<Events> {
       a[kind].length ? a[kind].includes(row.name) : isCompatible(JSON.parse(row.settings), machine);
     if (!permitted('process', proc)) throw new SlicingError(`Prozessprofil „${proc.name}“ ist für diesen Drucker nicht freigegeben`);
     if (!permitted('filament', fil)) throw new SlicingError(`Filamentprofil „${fil.name}“ ist für diesen Drucker nicht freigegeben`);
+    const machineSettings = JSON.parse(machine.settings) as Record<string, unknown>;
+    const bedType = b.bedType ?? a.bedType ?? defaultBedType(machineSettings);
+    checkBedTemp(JSON.parse(fil.settings), fil.name, bedType);
+    if (!b.arrange) checkPlacement(items, machineSettings);
 
     const now = Date.now();
     const row = this.db.transaction((tx) => {
@@ -392,6 +435,8 @@ export class SlicingService extends EventEmitter<Events> {
           copies: items.reduce((n, i) => n + i.copies, 0),
           autoOrient: b.autoOrient,
           autoPrint: b.autoPrint,
+          arrange: b.arrange,
+          bedType,
           overrides: JSON.stringify(b.overrides),
           status: 'queued',
           note: b.note || null,
@@ -402,7 +447,15 @@ export class SlicingService extends EventEmitter<Events> {
         .returning()
         .get();
       tx.insert(jobModels)
-        .values(items.map((i, position) => ({ jobId: job.id, modelId: i.model.id, copies: i.copies, position })))
+        .values(
+          items.map((i, position) => ({
+            jobId: job.id,
+            modelId: i.model.id,
+            copies: i.copies,
+            position,
+            transform: i.transform ? JSON.stringify(i.transform) : null,
+          })),
+        )
         .run();
       return job;
     });
@@ -673,18 +726,22 @@ export class SlicingService extends EventEmitter<Events> {
       fs.rmSync(workDir, { recursive: true, force: true });
       fs.mkdirSync(workDir, { recursive: true });
       const machineSettings = JSON.parse(machine.settings);
+      const bedType = bedTypeSchema.safeParse(job.bedType).data ?? defaultBedType(machineSettings);
+      checkBedTemp(JSON.parse(fil.settings), fil.name, bedType, SliceError);
       const cli = cliProfiles(
         { name: machine.name, settings: machineSettings, systemPrinter: machine.systemPrinter ?? machine.name },
         applyOverrides(JSON.parse(proc.settings), JSON.parse(job.overrides) as SliceOverrides),
         JSON.parse(fil.settings),
+        bedType,
       );
       const started = Date.now();
       const out = await runOrca(
         this.cfg.orcaBin,
         {
           workDir,
-          models: items.map((i) => ({ path: i.model.storedPath, copies: i.copies })),
+          models: await this.prepareModels(items, job.arrange, workDir),
           autoOrient: job.autoOrient,
+          arrange: job.arrange,
           ...cli,
         },
         this.cfg.sliceTimeoutMs,
@@ -707,7 +764,10 @@ export class SlicingService extends EventEmitter<Events> {
       }
       if (!thumbs.length) {
         const meshes = await Promise.all(
-          items.map(async (i) => ({ mesh: parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath)), copies: i.copies })),
+          items.map(async (i) => {
+            const mesh = parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath));
+            return { mesh: i.transform ? transformMesh(mesh, i.transform) : mesh, copies: i.copies };
+          }),
         );
         const mesh = layoutForPreview(meshes);
         thumbs = sizes.map((size) => ({ size, png: renderThumbnail(mesh, size) }));
@@ -771,12 +831,49 @@ export class SlicingService extends EventEmitter<Events> {
   /** Models of a job in plate order. */
   private jobItems(jobId: number) {
     return this.db
-      .select({ model: models, copies: jobModels.copies })
+      .select({ model: models, copies: jobModels.copies, transform: jobModels.transform })
       .from(jobModels)
       .innerJoin(models, eq(models.id, jobModels.modelId))
       .where(eq(jobModels.jobId, jobId))
       .orderBy(jobModels.position)
-      .all();
+      .all()
+      .map((r) => ({ ...r, transform: r.transform ? (JSON.parse(r.transform) as ModelTransform) : null }));
+  }
+
+  /**
+   * Input files for Orca. Rotation/scale are baked into a temporary STL; for a manually
+   * arranged plate every copy gets its own STL at its bed position (Orca keeps the XY
+   * coordinates of unarranged parts and only drops them onto the bed).
+   */
+  private async prepareModels(items: ReturnType<SlicingService['jobItems']>, arrange: boolean, workDir: string) {
+    const out: { path: string; copies: number }[] = [];
+    // Orca names objects after the file (Klipper shows them when skipping objects), so keep the model's name.
+    const partFile = async (idx: number, copy: number, name: string, mesh: Mesh) => {
+      const dir = path.join(workDir, 'parts', `${idx}-${copy}`);
+      await fs.promises.mkdir(dir, { recursive: true });
+      const file = path.join(dir, `${name.replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 80) || 'modell'}.stl`);
+      await writeStl(mesh, file);
+      return file;
+    };
+    for (const [idx, i] of items.entries()) {
+      const t = i.transform;
+      if (arrange && (!t || isIdentity(t))) {
+        out.push({ path: i.model.storedPath, copies: i.copies });
+        continue;
+      }
+      const mesh = parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath));
+      const tr = t ?? { rotation: [0, 0, 0, 1] as ModelTransform['rotation'], scale: 1 };
+      if (arrange) {
+        out.push({ path: await partFile(idx, 0, i.model.name, transformMesh(mesh, tr)), copies: i.copies });
+        continue;
+      }
+      const positions = t?.positions ?? [];
+      if (positions.length < i.copies) throw new SliceError(`Für „${i.model.name}“ fehlen Positionen auf dem Druckbett`);
+      for (const [c, pos] of positions.slice(0, i.copies).entries()) {
+        out.push({ path: await partFile(idx, c, i.model.name, transformMesh(mesh, tr, pos)), copies: 1 });
+      }
+    }
+    return out;
   }
 
   private toJobInfo(j: JobRow): JobInfo {
@@ -790,14 +887,15 @@ export class SlicingService extends EventEmitter<Events> {
       const r = profs.find((x) => x.id === id);
       return { id, name: r?.name ?? '?', version: r?.version ?? 0 };
     };
-    const list: JobModel[] = this.jobItems(j.id).map(({ model: m, copies }) => ({
+    const list: JobModel[] = this.jobItems(j.id).map(({ model: m, copies, transform }) => ({
       id: m.id,
       name: m.name,
       thumbnailUrl: `/api/models/${m.id}/thumbnail`,
       dimensions: [m.sizeX, m.sizeY, m.sizeZ],
       copies,
+      transform,
     }));
-    const fallback: JobModel = { id: j.modelId, name: 'gelöschtes Modell', thumbnailUrl: `/api/models/${j.modelId}/thumbnail`, dimensions: [0, 0, 0], copies: j.copies };
+    const fallback: JobModel = { id: j.modelId, name: 'gelöschtes Modell', thumbnailUrl: `/api/models/${j.modelId}/thumbnail`, dimensions: [0, 0, 0], copies: j.copies, transform: null };
     return {
       id: j.id,
       status: j.status,
@@ -812,6 +910,8 @@ export class SlicingService extends EventEmitter<Events> {
       copies: j.copies,
       autoOrient: j.autoOrient,
       autoPrint: j.autoPrint,
+      arrange: j.arrange,
+      bedType: bedTypeSchema.safeParse(j.bedType).data ?? null,
       error: j.error,
       gcodeName: j.gcodeName,
       printerPath: j.printerPath,
@@ -842,6 +942,37 @@ function toProfileInfo(r: ProfileRow): SlicerProfileInfo {
     sourceFile: r.sourceFile,
     createdAt: r.createdAt,
   };
+}
+
+/** The plate a machine profile names (`default_bed_type`), else OrcaSlicer's usual default. */
+export function defaultBedType(machine: Record<string, unknown>): BedType {
+  return bedTypeSchema.safeParse(machine.default_bed_type).data ?? FALLBACK_BED_TYPE;
+}
+
+/** Orca refuses plates whose filament temperature is 0 ("not supported"); say so up front. */
+function checkBedTemp(
+  filament: Record<string, unknown>,
+  name: string,
+  bedType: BedType,
+  Err: new (msg: string) => Error = SlicingError,
+) {
+  const raw = filament[BED_TYPES[bedType].temp];
+  const temp = Number(Array.isArray(raw) ? raw[0] : raw);
+  if (raw !== undefined && temp === 0) {
+    throw new Err(`Filament „${name}“ ist für die Druckplatte „${BED_TYPES[bedType].label}“ nicht vorgesehen (Betttemperatur 0 °C im Profil)`);
+  }
+}
+
+/** Manually placed parts must lie inside the bed (by their footprint's bounding box). */
+function checkPlacement(items: { model: ModelRow; copies: number; transform?: ModelTransform }[], machine: Record<string, unknown>) {
+  const bed = bedFromSettings(machine).bed;
+  const [bx0, bx1] = [Math.min(...bed.map((p) => p[0])), Math.max(...bed.map((p) => p[0]))];
+  const [by0, by1] = [Math.min(...bed.map((p) => p[1])), Math.max(...bed.map((p) => p[1]))];
+  for (const i of items) {
+    for (const [x, y] of i.transform?.positions ?? []) {
+      if (x < bx0 || x > bx1 || y < by0 || y > by1) throw new SlicingError(`„${i.model.name}“ liegt außerhalb des Druckbetts`);
+    }
+  }
 }
 
 function isExecutable(file: string): boolean {

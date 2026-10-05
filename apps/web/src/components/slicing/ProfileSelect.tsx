@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 import clsx from 'clsx';
-import type { SlicerProfileInfo } from '@printhub/shared';
+import { BED_TYPES, type BedType, type SlicerProfileInfo } from '@printhub/shared';
+import { plateTemp } from '../../lib/profiles';
 import { Field } from '../ui';
 
 export function ProfileSelect({
@@ -49,7 +50,27 @@ export function describeProcess(p: SlicerProfileInfo) {
     .join(' · ');
 }
 
-export function describeFilament(p: SlicerProfileInfo) {
+export function describeFilament(p: SlicerProfileInfo, bedType?: BedType) {
   const s = p.summary;
-  return [s.material, s.nozzleTemp && `${s.nozzleTemp} °C`, s.bedTemp && `Bett ${s.bedTemp} °C`, s.flow && `Flow ${s.flow}`].filter(Boolean).join(' · ');
+  const bed = bedType ? plateTemp(p, bedType) ?? s.bedTemp : s.bedTemp;
+  const bedText = bed === 0 ? 'nicht für diese Platte' : bed && `Bett ${bed} °C`;
+  return [s.material, s.nozzleTemp && `${s.nozzleTemp} °C`, bedText, s.flow && `Flow ${s.flow}`].filter(Boolean).join(' · ');
+}
+
+/** Plate choice (OrcaSlicer's bed type); decides which bed temperature the filament uses. */
+export function BedTypeSelect({ value, onChange, label = 'Druckplatte', className }: { value: BedType; onChange: (v: BedType) => void; label?: string; className?: string }) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as BedType)}
+      aria-label={label}
+      className={clsx('min-h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm text-text', className)}
+    >
+      {(Object.keys(BED_TYPES) as BedType[]).map((b) => (
+        <option key={b} value={b}>
+          {BED_TYPES[b].label}
+        </option>
+      ))}
+    </select>
+  );
 }
