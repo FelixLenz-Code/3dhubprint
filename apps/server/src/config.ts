@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import path from 'node:path';
 
-const envSchema = z.object({
+export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   HOST: z.string().default('0.0.0.0'),
   PORT: z.coerce.number().int().positive().default(8080),
@@ -38,7 +38,12 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 
-const env = envSchema.parse(process.env);
+/** Empty values (e.g. "PUBLIC_URL=" in .env) count as unset, so defaults and optionals apply. */
+export function parseEnv(source: NodeJS.ProcessEnv) {
+  return envSchema.parse(Object.fromEntries(Object.entries(source).filter(([, v]) => v !== undefined && v.trim() !== '')));
+}
+
+const env = parseEnv(process.env);
 
 export const config = {
   ...env,
