@@ -340,6 +340,11 @@ export class SlicingService extends EventEmitter<Events> {
     return path.join(this.dirs.previews, `job-${jobId}-${view}.png`);
   }
 
+  /** Gzipped toolpaths of the sliced plate for the interactive 3D view. */
+  pathsFile(jobId: number) {
+    return path.join(this.dirs.previews, `job-${jobId}-paths.bin.gz`);
+  }
+
   thumbPath(modelId: number) {
     return path.join(this.dirs.thumbs, `model-${modelId}.png`);
   }
@@ -424,6 +429,11 @@ export class SlicingService extends EventEmitter<Events> {
     checkBedTemp(JSON.parse(fil.settings), fil.name, bedType);
     if (!b.arrange) checkPlacement(items, machineSettings);
 
+    if (b.replaces !== undefined) {
+      const orig = this.jobRow(b.replaces);
+      if (!orig) throw new SlicingError('Der zu bearbeitende Auftrag existiert nicht mehr', 404);
+      if (!editable(orig.status)) throw new SlicingError('Ein Auftrag, der gerade gedruckt oder übertragen wird, kann nicht bearbeitet werden', 409);
+    }
     this.removeStaleDrafts();
     const now = Date.now();
     const row = this.db.transaction((tx) => {
@@ -440,6 +450,7 @@ export class SlicingService extends EventEmitter<Events> {
           // A draft is reviewed before anything goes to the printer.
           autoPrint: b.autoPrint && !b.draft,
           draft: b.draft,
+          replaces: b.replaces ?? null,
           arrange: b.arrange,
           bedType,
           overrides: JSON.stringify(b.overrides),
@@ -497,6 +508,7 @@ export class SlicingService extends EventEmitter<Events> {
     this.db.delete(jobs).where(eq(jobs.id, id)).run();
     if (j.gcodePath) fs.rmSync(j.gcodePath, { force: true });
     for (const v of ['top', 'iso'] as const) fs.rmSync(this.previewPath(id, v), { force: true });
+    fs.rmSync(this.pathsFile(id), { force: true });
     this.emit('job_removed', id);
     if (j.status === 'waiting' && j.printerId) this.renumberQueue(j.printerId);
   }
@@ -505,8 +517,23 @@ export class SlicingService extends EventEmitter<Events> {
   keepJob(id: number): JobInfo {
     const j = this.jobRow(id);
     if (!j) throw new SlicingError('Auftrag nicht gefunden', 404);
-    if (j.draft) this.update(id, { draft: false });
+    this.promoteDraft(j, true);
     return this.getJob(id)!;
+  }
+
+  /**
+   * Turns a draft into a regular job. An edited job replaces its original; when saved (not
+   * sent), it also takes over the original's place in the print queue.
+   */
+  private promoteDraft(j: JobRow, takeQueuePlace: boolean) {
+    if (!j.draft) return;
+    const orig = j.replaces ? this.jobRow(j.replaces) : undefined;
+    const patch: Partial<JobRow> = { draft: false, replaces: null };
+    if (orig && takeQueuePlace && orig.status === 'waiting' && orig.printerId === j.printerId && j.status === 'sliced') {
+      Object.assign(patch, { status: 'waiting', queuePosition: orig.queuePosition });
+    }
+    this.update(j.id, patch);
+    if (orig && editable(orig.status)) this.deleteJob(orig.id);
   }
 
   private removeStaleDrafts() {
@@ -546,8 +573,9 @@ export class SlicingService extends EventEmitter<Events> {
     const st = client.status.printState;
     if (print && (st === 'printing' || st === 'paused')) throw new SlicingError('Auf dem Drucker läuft bereits ein Druck', 409);
 
+    this.promoteDraft(j, false);
     const before = j.status;
-    this.update(id, { status: 'uploading', error: null, draft: false });
+    this.update(id, { status: 'uploading', error: null });
     try {
       const printerPath = await uploadToPrinter(client, j.gcodePath, j.gcodeName, { print });
       this.update(id, {
@@ -570,8 +598,18 @@ export class SlicingService extends EventEmitter<Events> {
 
   /** Appends a sliced job to its printer's queue and starts it if the printer is ready. */
   enqueue(id: number): JobInfo {
-    const j = this.jobRow(id);
+    let j = this.jobRow(id);
     if (!j) throw new SlicingError('Auftrag nicht gefunden', 404);
+    // An edited job queued again takes the original's place.
+    if (j.draft && (SENDABLE as readonly string[]).includes(j.status)) {
+      this.promoteDraft(j, true);
+      j = this.jobRow(id)!;
+      if (j.status === 'waiting' && j.printerId) {
+        this.renumberQueue(j.printerId);
+        void this.tryStart(j.printerId);
+        return this.getJob(id)!;
+      }
+    }
     if (!j.printerId) throw new SlicingError('Der Drucker des Auftrags existiert nicht mehr', 409);
     if (j.status === 'waiting') return this.getJob(id)!;
     if (!(SENDABLE as readonly string[]).includes(j.status) || j.status === 'printing' || !j.gcodePath) {
@@ -583,7 +621,7 @@ export class SlicingService extends EventEmitter<Events> {
         .from(jobs)
         .where(and(eq(jobs.printerId, j.printerId), eq(jobs.status, 'waiting')))
         .get()?.m ?? 0;
-    this.update(id, { status: 'waiting', queuePosition: max + 1, error: null, draft: false });
+    this.update(id, { status: 'waiting', queuePosition: max + 1, error: null });
     void this.tryStart(j.printerId);
     return this.getJob(id)!;
   }
@@ -787,6 +825,7 @@ export class SlicingService extends EventEmitter<Events> {
         if (preview.segments > 0) {
           await fs.promises.writeFile(this.previewPath(job.id, 'top'), preview.top);
           await fs.promises.writeFile(this.previewPath(job.id, 'iso'), preview.iso);
+          await fs.promises.writeFile(this.pathsFile(job.id), preview.paths);
           thumbs = sizes.map((size) => ({ size, png: preview.thumbnails.get(size)! }));
         }
       } catch (err) {
@@ -933,7 +972,11 @@ export class SlicingService extends EventEmitter<Events> {
       models: list.length ? list : [fallback],
       overrides: JSON.parse(j.overrides) as SliceOverrides,
       preview: fs.existsSync(this.previewPath(j.id, 'top'))
-        ? { top: `/api/jobs/${j.id}/preview/top?v=${j.updatedAt}`, iso: `/api/jobs/${j.id}/preview/iso?v=${j.updatedAt}` }
+        ? {
+            top: `/api/jobs/${j.id}/preview/top?v=${j.updatedAt}`,
+            iso: `/api/jobs/${j.id}/preview/iso?v=${j.updatedAt}`,
+            paths: fs.existsSync(this.pathsFile(j.id)) ? `/api/jobs/${j.id}/toolpaths?v=${j.updatedAt}` : null,
+          }
         : null,
       printer: p ?? null,
       profiles: { machine: prof(j.machineProfileId), process: prof(j.processProfileId), filament: prof(j.filamentProfileId) },
@@ -942,6 +985,7 @@ export class SlicingService extends EventEmitter<Events> {
       autoPrint: j.autoPrint,
       arrange: j.arrange,
       draft: j.draft,
+      replaces: j.replaces,
       bedType: bedTypeSchema.safeParse(j.bedType).data ?? null,
       error: j.error,
       gcodeName: j.gcodeName,
@@ -973,6 +1017,11 @@ function toProfileInfo(r: ProfileRow): SlicerProfileInfo {
     sourceFile: r.sourceFile,
     createdAt: r.createdAt,
   };
+}
+
+/** Jobs that may be edited (replaced): not while the printer is busy with them. */
+function editable(status: JobRow['status']) {
+  return status !== 'printing' && status !== 'uploading';
 }
 
 /** The plate a machine profile names (`default_bed_type`), else OrcaSlicer's usual default. */

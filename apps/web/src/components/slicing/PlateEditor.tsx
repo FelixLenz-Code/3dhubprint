@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { AlertTriangle, Eye, Footprints, Minus, Plus, RotateCcw, RotateCw, Scan, Undo2 } from 'lucide-react';
+import { AlertTriangle, Eye, Footprints, Minus, Plus, RotateCcw, RotateCw, Scan, Sparkles, Undo2 } from 'lucide-react';
 import type { BufferGeometry } from 'three';
 import type { ModelInfo, ModelTransform } from '@printhub/shared';
 import { ApiError } from '../../lib/api';
 import { findOverhangs } from '../../lib/overhang';
-import { IDENTITY, axisAngle, cleanQuat, faceDown, layout, mulQuat, orient, rotatedSize, type Bed, type OrientedMesh, type PlateReport, OVERHANG_WARN_MM2 } from '../../lib/plate';
+import { IDENTITY, axisAngle, bestLayFlat, cleanQuat, faceDown, layout, mulQuat, orient, rotatedSize, type Bed, type OrientedMesh, type PlateReport, OVERHANG_WARN_MM2 } from '../../lib/plate';
 import { Alert, Button, Input, Spinner } from '../ui';
 import type { PlateItem } from './ModelPicker';
-import { PlateScene, buildGeometry, type SceneObject } from './plateScene';
+import { AXIS_COLORS, PlateScene, buildGeometry, type SceneObject } from './plateScene';
 
 
 const UNITS = [
@@ -39,7 +39,6 @@ export default function PlateEditor({
   bed,
   arrange,
   onArrangeChange,
-  autoOrient,
   supportAngle,
   supportOn,
   onEnableSupport,
@@ -51,7 +50,6 @@ export default function PlateEditor({
   bed: Bed;
   arrange: boolean;
   onArrangeChange: (arrange: boolean) => void;
-  autoOrient: boolean;
   /** Slope (° from horizontal) below which Orca adds supports. */
   supportAngle: number;
   /** Supports enabled by the profile or the job's overrides. */
@@ -86,7 +84,7 @@ export default function PlateEditor({
     [items.map((i) => `${i.modelId}:${JSON.stringify(transformOf(i).rotation)}:${transformOf(i).scale}`).join('|'), meshes.map((m) => m.dataUpdatedAt).join()],
   );
 
-  const overhangs = useMemo(() => (autoOrient ? null : oriented.map((o) => (o ? findOverhangs(o.tris, supportAngle) : null))), [oriented, supportAngle, autoOrient]);
+  const overhangs = useMemo(() => oriented.map((o) => (o ? findOverhangs(o.tris, supportAngle) : null)), [oriented, supportAngle]);
 
 
   const geometries = useMemo(() => {
@@ -160,11 +158,11 @@ export default function PlateEditor({
         : !arrange && items.some((i) => (i.transform?.positions?.length ?? 0) < i.copies)
           ? 'Teile werden noch platziert…'
           : null;
-  const overhangKey = overhangs?.map((o) => (o ? Math.round(o.area) : 'x')).join() ?? 'auto';
+  const overhangKey = overhangs.map((o) => (o ? Math.round(o.area) : 'x')).join();
   useEffect(() => {
     onReport({
       blocking,
-      overhangs: overhangs && overhangs.every(Boolean) ? new Map(items.map((it, idx) => [it.modelId, overhangs[idx]!.area])) : null,
+      overhangs: overhangs.every(Boolean) ? new Map(items.map((it, idx) => [it.modelId, overhangs[idx]!.area])) : null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocking, overhangKey]);
@@ -227,6 +225,8 @@ export default function PlateEditor({
         invalid: bad.has(`${p.item}:${p.copy}`) || sizes[p.item]![2] > bed.height,
       }));
     scene.current?.setObjects(objs);
+    const p = placed.find((q) => q.item === selected);
+    scene.current?.setPartAxes(p ? { x: p.x, y: p.y, z: p.h / 2, size: Math.max(p.w, p.d, p.h) / 2 } : null);
   });
 
   // --- editing --------------------------------------------------------------
@@ -248,6 +248,28 @@ export default function PlateEditor({
     onChange(items.map((it, i) => (i === idx ? { ...it, copies: Math.min(50, Math.max(1, copies)) } : it)));
   const rotate = (idx: number, axis: 'x' | 'y' | 'z', deg: number) =>
     updateItem(idx, { rotation: cleanQuat(mulQuat(axisAngle(axis, deg), transformOf(items[idx]!).rotation)) });
+
+  /** Lets PrintHub pick the side to lie on (largest flat contact, least overhang). */
+  const [flattening, setFlattening] = useState(false);
+  const layFlat = (indices: number[]) => {
+    setFlattening(true);
+    // Let the button show its busy state before the (synchronous) search runs.
+    setTimeout(() => {
+      try {
+        const next = items.map((it, idx) => {
+          const src = meshes[idx]?.data;
+          if (!indices.includes(idx) || !src) return it;
+          const t = transformOf(it);
+          const scaled = t.scale === 1 ? src : src.map((v) => v * t.scale);
+          const r = bestLayFlat(scaled, (tris) => findOverhangs(tris, supportAngle).area, t.rotation);
+          return r ? withRotation(it, r.rotation) : it;
+        });
+        onChange(next);
+      } finally {
+        setFlattening(false);
+      }
+    }, 30);
+  };
 
   const overhanging = items
     .map((it, idx) => ({ it, area: overhangs?.[idx]?.area ?? 0 }))
@@ -286,6 +308,11 @@ export default function PlateEditor({
               <input type="checkbox" checked={arrange} onChange={(e) => onArrangeChange(e.target.checked)} className="accent-[var(--accent)]" />
               Automatisch anordnen (OrcaSlicer)
             </label>
+            {items.length > 1 && (
+              <button type="button" onClick={() => layFlat(items.map((_, i) => i))} disabled={flattening || loading} className="text-accent hover:underline disabled:opacity-50">
+                Alle flach hinlegen
+              </button>
+            )}
             {!arrange && (
               <button type="button" onClick={relayout} className="text-accent hover:underline">
                 Neu anordnen
@@ -359,7 +386,7 @@ export default function PlateEditor({
                 </div>
 
                 <div className="mt-1.5 text-xs">
-                  {autoOrient ? null : area === undefined ? (
+                  {area === undefined ? (
                     <span className="text-text-3">Überhänge werden geprüft…</span>
                   ) : area >= OVERHANG_WARN_MM2 ? (
                     <span className="font-medium text-critical">Überhang ≈ {Math.max(1, Math.round(area / 100))} cm², braucht Stützen</span>
@@ -373,44 +400,46 @@ export default function PlateEditor({
 
                 {open && (
                   <div className="mt-3 space-y-2 border-t border-border pt-3">
-                    {autoOrient ? (
-                      <p className="text-xs text-text-3">„Automatisch ausrichten“ ist an: OrcaSlicer wählt die Lage selbst.</p>
-                    ) : (
-                      <>
-                        <Button variant={tool === 'face' ? 'primary' : 'secondary'} className="w-full" onClick={() => setTool(tool === 'face' ? 'move' : 'face')}>
-                          <Footprints className="size-4" /> Fläche aufs Bett legen
+                      <div className="grid grid-cols-2 gap-1">
+                        <Button className="px-2 text-xs" onClick={() => layFlat([idx])} loading={flattening} disabled={!meshes[idx]?.data}>
+                          <Sparkles className="size-4" /> Flach hinlegen
                         </Button>
-                        <div className="grid grid-cols-3 gap-1">
-                          {(['x', 'y', 'z'] as const).map((axis) => (
-                            <div key={axis} className="flex items-center justify-center gap-0.5 rounded-lg border border-border py-0.5">
-                              <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(idx, axis, -90)} aria-label={`${axis.toUpperCase()} −90°`} title="−90°">
-                                <RotateCcw className="size-4" />
-                              </Button>
-                              <span className="w-3 text-center text-xs font-semibold uppercase text-text-2">{axis}</span>
-                              <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(idx, axis, 90)} aria-label={`${axis.toUpperCase()} +90°`} title="+90°">
-                                <RotateCw className="size-4" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="flex gap-1">
-                          <Button variant="ghost" className="h-8 min-h-8 flex-1 px-1.5 text-xs" onClick={() => rotate(idx, 'z', -15)}>
-                            Z −15°
-                          </Button>
-                          <Button variant="ghost" className="h-8 min-h-8 flex-1 px-1.5 text-xs" onClick={() => rotate(idx, 'z', 15)}>
-                            Z +15°
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            className="h-8 min-h-8 flex-1 px-1.5 text-xs"
-                            onClick={() => updateItem(idx, { rotation: IDENTITY })}
-                            disabled={t.rotation.join() === IDENTITY.join()}
-                          >
-                            <Undo2 className="size-3.5" /> Lage
-                          </Button>
-                        </div>
-                      </>
-                    )}
+                        <Button variant={tool === 'face' ? 'primary' : 'secondary'} className="px-2 text-xs" onClick={() => setTool(tool === 'face' ? 'move' : 'face')}>
+                          <Footprints className="size-4" /> Fläche wählen
+                        </Button>
+                      </div>
+                      <p className="text-xs text-text-3">„Flach hinlegen“ sucht die Seite mit der größten Auflage und den wenigsten Überhängen.</p>
+                      <div className="grid grid-cols-3 gap-1">
+                        {(['x', 'y', 'z'] as const).map((axis) => (
+                          <div key={axis} className="flex items-center justify-center gap-0.5 rounded-lg border border-border py-0.5">
+                            <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(idx, axis, -90)} aria-label={`${axis.toUpperCase()} −90°`} title={`−90° um die ${axis.toUpperCase()}-Achse`}>
+                              <RotateCcw className="size-4" />
+                            </Button>
+                            <span className="w-3 text-center text-xs font-bold uppercase" style={{ color: AXIS_COLORS[axis] }}>
+                              {axis}
+                            </span>
+                            <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(idx, axis, 90)} aria-label={`${axis.toUpperCase()} +90°`} title={`+90° um die ${axis.toUpperCase()}-Achse`}>
+                              <RotateCw className="size-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" className="h-8 min-h-8 flex-1 px-1.5 text-xs" onClick={() => rotate(idx, 'z', -15)}>
+                          Z −15°
+                        </Button>
+                        <Button variant="ghost" className="h-8 min-h-8 flex-1 px-1.5 text-xs" onClick={() => rotate(idx, 'z', 15)}>
+                          Z +15°
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          className="h-8 min-h-8 flex-1 px-1.5 text-xs"
+                          onClick={() => updateItem(idx, { rotation: IDENTITY })}
+                          disabled={t.rotation.join() === IDENTITY.join()}
+                        >
+                          <Undo2 className="size-3.5" /> Lage
+                        </Button>
+                      </div>
                     <label className="flex items-center gap-2 text-xs text-text-2">
                       Größe
                       <Input

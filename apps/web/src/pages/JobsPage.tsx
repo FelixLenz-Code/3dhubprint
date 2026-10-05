@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, ClipboardList, Download, FileText, ListPlus, ListX, Play, Plus, RotateCw, Send, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ClipboardList, Download, FileText, ListPlus, ListX, Pencil, Play, Plus, RotateCw, Send, Trash2 } from 'lucide-react';
 import type { JobInfo, SlicerStatus } from '@printhub/shared';
 import { api } from '../lib/api';
 import { useIsAdmin } from '../lib/auth';
@@ -256,6 +256,13 @@ function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolea
           <Button variant="secondary" onClick={() => run('retry', () => api(`/jobs/${job.id}/retry`, { body: {} }))} loading={busy === 'retry'}>
             <RotateCw className="size-4" /> Erneut slicen
           </Button>
+        )}
+        {editable && job.status !== 'uploading' && job.status !== 'printing' && (
+          <Link to={`/jobs/${job.id}/edit`}>
+            <Button variant="ghost">
+              <Pencil className="size-4" /> Bearbeiten
+            </Button>
+          </Link>
         )}
         {ready && (
           <a href={`/api/jobs/${job.id}/gcode`} download>

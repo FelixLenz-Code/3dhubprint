@@ -165,6 +165,8 @@ export const jobs = sqliteTable('jobs', {
   arrange: integer('arrange', { mode: 'boolean' }).notNull().default(true),
   /** Sliced for review in the job wizard; hidden until saved, removed after a day. */
   draft: integer('draft', { mode: 'boolean' }).notNull().default(false),
+  /** Edited copy of this job: the original is replaced when the draft is saved. */
+  replaces: integer('replaces'),
   /** Position in the printer's queue while status = waiting. */
   queuePosition: integer('queue_position'),
   finishedAt: integer('finished_at'),

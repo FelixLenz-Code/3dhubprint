@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { encodePng } from './png.js';
 
 /**
@@ -37,6 +38,8 @@ export interface PlatePreview {
   /** Square renders of the printed objects for G-code thumbnails, keyed by size. */
   thumbnails: Map<number, Buffer>;
   segments: number;
+  /** Gzipped toolpaths for the browser's 3D viewer (see encodeToolpaths). */
+  paths: Buffer;
 }
 
 interface Segments {
@@ -319,7 +322,79 @@ export async function renderPlatePreview(gcodePath: string, plate: PlateGeometry
     // Thumbnails are resampled from the 3D view instead of rendered again.
     thumbnails: new Map(thumbSizes.map((s) => [s, iso.toPngSized(s)])),
     segments: count,
+    paths: gzipSync(encodeToolpaths(seg), { level: 6 }),
   };
+}
+
+/** Coordinates are stored as Int16 in steps of this many mm (±655 mm). */
+const PATH_UNIT = 0.02;
+
+/**
+ * Compact toolpaths for the interactive viewer. Consecutive collinear segments (also the
+ * many short chords of arcs) are merged. Little-endian layout:
+ *   u32 segments, u32 layers, f32 unit, u32 palette size K
+ *   K × (r, g, b, 0) colors, palette index K-1 = other
+ *   u32[layers] first segment of each layer
+ *   i16[segments × 6] x1 y1 z1 x2 y2 z2 (× unit)
+ *   u8[segments] palette index
+ */
+export function encodeToolpaths(seg: Segments): Buffer {
+  const { pos, color, count } = seg;
+  const out: number[] = [];
+  const feat: number[] = [];
+  const layers: number[] = [];
+  let layerZ = -Infinity;
+  const K = FEATURES.length + 2; // + purge lines + other
+  const paletteIdx = (c: number) => (c < FEATURES.length ? c : c === 253 ? FEATURES.length : FEATURES.length + 1);
+
+  let run: { x1: number; y1: number; z: number; x2: number; y2: number; f: number } | null = null;
+  const flush = () => {
+    if (!run) return;
+    if (run.z > layerZ + 0.04) {
+      layers.push(feat.length);
+      layerZ = run.z;
+    }
+    out.push(run.x1, run.y1, run.z, run.x2, run.y2, run.z);
+    feat.push(paletteIdx(run.f));
+    run = null;
+  };
+  for (let k = 0; k < count; k++) {
+    const o = k * 6;
+    const [x1, y1, z1, x2, y2, z2] = [pos[o]!, pos[o + 1]!, pos[o + 2]!, pos[o + 3]!, pos[o + 4]!, pos[o + 5]!];
+    const f = color[k]!;
+    if (run && f === run.f && Math.abs(z1 - run.z) < 1e-4 && Math.abs(z2 - run.z) < 1e-4 && Math.abs(x1 - run.x2) < 1e-3 && Math.abs(y1 - run.y2) < 1e-3) {
+      const ax = run.x2 - run.x1, ay = run.y2 - run.y1;
+      const bx = x2 - x1, by = y2 - y1;
+      const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+      if (la > 0 && lb > 0 && (ax * bx + ay * by) / (la * lb) > 0.9995) {
+        run.x2 = x2;
+        run.y2 = y2;
+        continue;
+      }
+    }
+    flush();
+    run = { x1, y1, z: Math.max(z1, z2), x2, y2, f };
+  }
+  flush();
+
+  const n = feat.length;
+  const head = 16 + K * 4 + layers.length * 4;
+  const buf = Buffer.alloc(head + n * 12 + n);
+  buf.writeUInt32LE(n, 0);
+  buf.writeUInt32LE(layers.length, 4);
+  buf.writeFloatLE(PATH_UNIT, 8);
+  buf.writeUInt32LE(K, 12);
+  for (let i = 0; i < K; i++) {
+    const [r, g, b] = i < FEATURES.length ? FEATURES[i]![1] : i === FEATURES.length ? [110, 110, 110] : DEFAULT_COLOR;
+    buf.writeUInt8(r, 16 + i * 4);
+    buf.writeUInt8(g, 17 + i * 4);
+    buf.writeUInt8(b, 18 + i * 4);
+  }
+  layers.forEach((l, i) => buf.writeUInt32LE(l, 16 + K * 4 + i * 4));
+  const clamp = (v: number) => Math.max(-32768, Math.min(32767, Math.round(v / PATH_UNIT)));
+  for (let i = 0; i < out.length; i++) buf.writeInt16LE(clamp(out[i]!), head + i * 2);
+  for (let i = 0; i < n; i++) buf.writeUInt8(feat[i]!, head + n * 12 + i);
+  return buf;
 }
 
 /** Whole bed seen from above, with grid; parts colored by feature, brighter = higher. */
@@ -404,7 +479,7 @@ export async function renderPlatePreviewOffThread(gcodePath: string, plate: Plat
   try {
     return await new Promise<PlatePreview>((resolve, reject) => {
       const w = new Worker(file, { workerData: { gcodePath, plate, sizes: thumbSizes } });
-      w.once('message', (m: { ok: boolean; error?: string; top: Uint8Array; iso: Uint8Array; thumbnails: [number, Uint8Array][]; segments: number }) => {
+      w.once('message', (m: { ok: boolean; error?: string; top: Uint8Array; iso: Uint8Array; thumbnails: [number, Uint8Array][]; segments: number; paths: Uint8Array }) => {
         void w.terminate();
         if (!m.ok) return reject(new Error(m.error));
         resolve({
@@ -412,6 +487,7 @@ export async function renderPlatePreviewOffThread(gcodePath: string, plate: Plat
           iso: Buffer.from(m.iso),
           thumbnails: new Map(m.thumbnails.map(([s, b]) => [s, Buffer.from(b)])),
           segments: m.segments,
+          paths: Buffer.from(m.paths),
         });
       });
       w.once('error', reject);

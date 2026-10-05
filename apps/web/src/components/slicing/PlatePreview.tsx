@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import clsx from 'clsx';
+
+// three.js only loads when the 3D view is shown.
+const ToolpathViewer = lazy(() => import('./ToolpathViewer'));
 
 // Same feature colors as the server-side renderer (Orca-like).
 const LEGEND: [string, string][] = [
@@ -14,20 +17,35 @@ const LEGEND: [string, string][] = [
   ['Stützen', 'rgb(100,191,77)'],
 ];
 
-/** The sliced plate rendered from G-code: top view of the bed, or 3D view of the parts. */
-export function PlatePreview({ preview, className }: { preview: { top: string; iso: string }; className?: string }) {
-  const [view, setView] = useState<'top' | 'iso'>('top');
+/**
+ * The sliced plate from the G-code: interactive 3D toolpaths (when available), the bed from
+ * above, or the rendered 3D image (older jobs).
+ */
+export function PlatePreview({ preview, className }: { preview: { top: string; iso: string; paths?: string | null }; className?: string }) {
+  const views = preview.paths
+    ? ([
+        ['3d', '3D'],
+        ['top', 'Druckbett'],
+      ] as const)
+    : ([
+        ['top', 'Druckbett'],
+        ['iso', '3D'],
+      ] as const);
+  const [view, setView] = useState<'3d' | 'top' | 'iso'>(views[0][0]);
   return (
     <div className={clsx('space-y-2', className)}>
-      <div className="relative overflow-hidden rounded-xl bg-[#1a1a19]">
-        <img src={view === 'top' ? preview.top : preview.iso} alt={view === 'top' ? 'Druckbett von oben' : '3D-Ansicht der Druckteile'} className="mx-auto aspect-square w-full max-w-md object-contain" />
+      <div className="relative">
+        {view === '3d' && preview.paths ? (
+          <Suspense fallback={<div className="aspect-square w-full rounded-xl bg-[#1a1a19] sm:aspect-[4/3]" />}>
+            <ToolpathViewer url={preview.paths} />
+          </Suspense>
+        ) : (
+          <div className="overflow-hidden rounded-xl bg-[#1a1a19]">
+            <img src={view === 'top' ? preview.top : preview.iso} alt={view === 'top' ? 'Druckbett von oben' : '3D-Ansicht der Druckteile'} className="mx-auto aspect-square w-full max-w-md object-contain" />
+          </div>
+        )}
         <div className="absolute right-2 top-2 flex overflow-hidden rounded-lg border border-white/10 bg-black/50 text-xs backdrop-blur">
-          {(
-            [
-              ['top', 'Druckbett'],
-              ['iso', '3D'],
-            ] as const
-          ).map(([v, l]) => (
+          {views.map(([v, l]) => (
             <button
               key={v}
               type="button"

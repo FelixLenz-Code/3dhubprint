@@ -173,4 +173,8 @@ export const migrations: string[] = [
   -- Job wizard: slice first, review, then save.
   ALTER TABLE jobs ADD COLUMN draft INTEGER NOT NULL DEFAULT 0;
   `,
+  `
+  -- Editing a job: the edited draft replaces the original when saved.
+  ALTER TABLE jobs ADD COLUMN replaces INTEGER;
+  `,
 ];

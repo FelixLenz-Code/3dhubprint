@@ -167,6 +167,8 @@ export interface JobInfo {
   bedType: BedType | null;
   /** Not saved yet (job wizard review). */
   draft: boolean;
+  /** Job this draft will replace when saved (editing). */
+  replaces: number | null;
   error: string | null;
   gcodeName: string | null;
   printerPath: string | null;
@@ -175,7 +177,7 @@ export interface JobInfo {
   filamentG: number | null;
   note: string | null;
   /** Rendered from the sliced G-code: whole bed from above and a 3D view of the parts. */
-  preview: { top: string; iso: string } | null;
+  preview: { top: string; iso: string; paths: string | null } | null;
   /** 1-based position in the printer's print queue (status = waiting). */
   queuePosition: number | null;
   finishedAt: number | null;
@@ -211,6 +213,8 @@ export const createJobSchema = z
     autoPrint: z.boolean().default(false),
     /** Slice for review only: hidden from lists until saved (sending/queueing saves it too). */
     draft: z.boolean().default(false),
+    /** Editing: this job is replaced once the (draft) result is saved. */
+    replaces: z.number().int().positive().optional(),
     /** false: keep the positions given per model instead of letting Orca arrange the plate. */
     arrange: z.boolean().default(true),
     /** Default: the printer's plate. */

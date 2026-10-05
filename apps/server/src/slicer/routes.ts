@@ -66,6 +66,14 @@ export async function slicerRoutes(
     return reply.send(fs.createReadStream(file));
   });
 
+  /** Toolpaths for the 3D viewer, stored gzipped (browsers decode it transparently). */
+  app.get('/jobs/:id/toolpaths', async (req, reply) => {
+    const file = slicing.pathsFile(idParams.parse(req.params).id);
+    if (!fs.existsSync(file)) throw new SlicingError('Keine Druckbahnen vorhanden', 404);
+    reply.header('content-type', 'application/octet-stream').header('content-encoding', 'gzip').header('cache-control', 'private, max-age=86400');
+    return reply.send(fs.createReadStream(file));
+  });
+
   app.get('/models/:id/file', async (req, reply) => {
     const m = slicing.getModelRow(idParams.parse(req.params).id);
     if (!m) throw new SlicingError('Modell nicht gefunden', 404);

@@ -386,6 +386,35 @@ describe('models and jobs', () => {
     expect(sent.body).toMatchObject({ status: 'uploaded', draft: false });
   });
 
+  it('edits a job: the saved draft replaces the original and keeps its queue place', async () => {
+    const body = { items: [{ modelId }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA' };
+    const sliced = async (id: number) =>
+      until(async () => {
+        const j = (await api(`/api/jobs/${id}`)).body as JobInfo;
+        return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+      });
+    // Keep the queue from starting: the printer's bed is not confirmed empty.
+    const orig = (await api('/api/jobs', { body })).body.id as number;
+    await sliced(orig);
+    const queued = (await api(`/api/jobs/${orig}/enqueue`, { body: {} })).body as JobInfo;
+    expect(queued.status).toBe('waiting');
+
+    const edit = await api('/api/jobs', { body: { ...body, items: [{ modelId, copies: 2 }], draft: true, replaces: orig } });
+    expect(edit.body).toMatchObject({ draft: true, replaces: orig });
+    const draft = await sliced(edit.body.id);
+    // Interactive 3D view: gzipped toolpaths.
+    expect(draft.preview?.paths).toBeTruthy();
+    const paths = await api(draft.preview!.paths!);
+    const buf = paths.body as Buffer;
+    expect(buf.readUInt32LE(0)).toBeGreaterThan(0);
+    expect(buf.length).toBeGreaterThan(16);
+
+    const kept = (await api(`/api/jobs/${draft.id}/keep`, { body: {} })).body as JobInfo;
+    expect(kept).toMatchObject({ draft: false, status: 'waiting', queuePosition: queued.queuePosition, copies: 2 });
+    expect((await api(`/api/jobs/${orig}`)).status).toBe(404);
+    expect((await api('/api/jobs', { body: { ...body, draft: true, replaces: 999999 } })).status).toBe(404);
+  });
+
   it('protects models that are still used by jobs', async () => {
     expect((await api(`/api/models/${modelId}`, { method: 'DELETE' })).status).toBe(409);
   });

@@ -30,17 +30,22 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
    Sie bestimmt, welche Betttemperatur aus dem Filamentprofil gilt.
 3. **Aufträge → Neuer Auftrag** führt in vier Schritten durch den Auftrag:
    1. *Modelle & Drucker:* Modelle hochladen oder aus der Bibliothek wählen, Drucker wählen.
-   2. *Druckbett:* Alle Teile in 3D auf dem Bett. Pro Teil: Stückzahl, **Einheit** (mm/cm/Zoll/m
-      für falsch skalierte Dateien), Drehen in 90°-Schritten oder „Fläche aufs Bett legen“,
-      Größe in %. Mit ausgeschaltetem „Automatisch anordnen“ lassen sich die Teile frei
+   2. *Druckbett:* Alle Teile in 3D auf dem Bett, mit farbigen X/Y/Z-Achsen. Pro Teil:
+      Stückzahl, **Einheit** (mm/cm/Zoll/m für falsch skalierte Dateien), **„Flach hinlegen“**
+      (PrintHub wählt die Seite mit der größten Auflage und den wenigsten Überhängen), Drehen in
+      90°-Schritten, eine Fläche selbst wählen, Größe in %. Mit ausgeschaltetem „Automatisch anordnen“ lassen sich die Teile frei
       verschieben. Überhänge, die ohne Stützen in die Luft gedruckt würden, werden pro Teil
       gemeldet und rot markiert, mit „Stützen aktivieren“.
    3. *Einstellungen:* Qualität, Druckplatte, Filament, Stützen/Brim/Skirt/Vasenmodus.
-   4. *Prüfen:* PrintHub slict und zeigt Vorschau, Druckdauer, Filament und Kosten. Dann
+   4. *Prüfen:* PrintHub slict und zeigt die Druckbahnen in einer drehbaren 3D-Ansicht mit
+      Schichtregler, dazu Druckdauer, Filament und Kosten. Dann
       *Speichern*, *Nur übertragen*, *Drucken* oder *In Warteschlange*. Erst dann erscheint
       der Auftrag in der Liste. „Zurück zum Druckbett“ verwirft das Ergebnis.
-4. **Schnelldruck** auf jeder Druckerseite: Modelle hochladen → Druckdauer, Filament und
-   Materialkosten ansehen → *Drucken*. Vorbelegt mit den zuletzt genutzten Profilen.
+4. **Aufträge bearbeiten:** öffnet den Assistenten mit allen Einstellungen des Auftrags. Das neu
+   geslicte Ergebnis ersetzt beim Speichern den bisherigen Auftrag (auch seinen Platz in der
+   Warteschlange).
+5. **Schnelldruck** auf jeder Druckerseite: derselbe Assistent im Dialog, mit festem Drucker und
+   den zuletzt genutzten Profilen.
 
 Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in den G-Code ein
 (Größen aus der Einstellung `thumbnails` des Druckerprofils, sonst 32 und 300 px).

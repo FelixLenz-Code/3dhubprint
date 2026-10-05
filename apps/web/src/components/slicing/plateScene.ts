@@ -24,6 +24,52 @@ interface Handlers {
 }
 
 const BASE = new THREE.Color(0x2aa198);
+/** Axis colors, also used for the rotate buttons. */
+export const AXIS_COLORS = { x: '#e5484d', y: '#30a46c', z: '#3e63dd' } as const;
+
+/** Arrows for X/Y/Z with letter labels; drawn on top so they stay visible inside parts. */
+function axesGizmo(length: number): THREE.Group {
+  const g = new THREE.Group();
+  const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+  for (const [axis, dir] of Object.entries(dirs) as ['x' | 'y' | 'z', THREE.Vector3][]) {
+    // Solid shaft + cone (line-based arrows are 1 px thin and hard to see).
+    const mat = new THREE.MeshBasicMaterial({ color: AXIS_COLORS[axis], depthTest: false, transparent: true });
+    const r = Math.max(0.8, length * 0.035);
+    const head = Math.max(4, length * 0.22);
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(r, r, length - head, 12), mat);
+    shaft.position.y = (length - head) / 2;
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(r * 2.6, head, 16), mat);
+    cone.position.y = length - head / 2;
+    const arrow = new THREE.Group();
+    arrow.add(shaft, cone);
+    // Cylinders point along +Y; turn them onto the axis.
+    arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    arrow.traverse((o) => (o.renderOrder = 10));
+    g.add(arrow);
+    const label = textSprite(axis.toUpperCase(), AXIS_COLORS[axis]);
+    label.position.copy(dir.clone().multiplyScalar(length + Math.max(4, length * 0.12)));
+    label.scale.setScalar(Math.max(9, length * 0.3));
+    g.add(label);
+  }
+  return g;
+}
+
+function textSprite(text: string, color: string): THREE.Sprite {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d')!;
+  ctx.font = 'bold 44px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.strokeText(text, 32, 34);
+  ctx.fillStyle = color;
+  ctx.fillText(text, 32, 34);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  sprite.renderOrder = 11;
+  return sprite;
+}
 const OVERHANG = new THREE.Color(0xe5484d);
 
 /** Builds a display geometry with per-face colors (faces flagged 2 are overhangs). */
@@ -48,6 +94,7 @@ export class PlateScene {
   private camera = new THREE.PerspectiveCamera(35, 1, 5, 20000);
   private controls: OrbitControls;
   private bedGroup = new THREE.Group();
+  private partAxes: THREE.Group | null = null;
   private objects = new Map<string, { mesh: THREE.Mesh; obj: SceneObject }>();
   private raycaster = new THREE.Raycaster();
   private resize: ResizeObserver;
@@ -115,7 +162,9 @@ export class PlateScene {
       new THREE.LineBasicMaterial({ color: isDark ? 0x55554f : 0xb5b3aa, transparent: true, opacity: 0.6 }),
     );
     box.position.set(bed.x0 + bed.width / 2, bed.y0 + bed.depth / 2, bed.height / 2);
-    this.bedGroup.add(plate, grid, box);
+    const origin = axesGizmo(Math.max(30, Math.min(bed.width, bed.depth) * 0.15));
+    origin.position.set(bed.x0, bed.y0, 0);
+    this.bedGroup.add(plate, grid, box, origin);
     if (!same) this.resetView();
     this.render();
   }
@@ -144,6 +193,20 @@ export class PlateScene {
       const mat = mesh.material as THREE.MeshStandardMaterial;
       mat.color.set(obj.invalid ? 0xff8080 : 0xffffff);
       mat.emissive.set(obj.selected ? 0x553311 : 0x000000);
+    }
+    this.render();
+  }
+
+  /** Axes through the selected part's center (null hides them). */
+  setPartAxes(at: { x: number; y: number; z: number; size: number } | null) {
+    if (this.partAxes) {
+      this.scene.remove(this.partAxes);
+      this.partAxes = null;
+    }
+    if (at) {
+      this.partAxes = axesGizmo(Math.max(15, at.size * 0.6 + 8));
+      this.partAxes.position.set(at.x, at.y, at.z);
+      this.scene.add(this.partAxes);
     }
     this.render();
   }
