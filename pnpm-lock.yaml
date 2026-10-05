@@ -142,6 +142,9 @@ importers:
       vite-plugin-pwa:
         specifier: ^0.21.1
         version: 0.21.2(vite@6.4.3(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15))(workbox-build@7.4.1(@types/babel__core@7.20.5))(workbox-window@7.4.1)
+      workbox-window:
+        specifier: ^7
+        version: 7.4.1
 
   packages/shared:
     dependencies:

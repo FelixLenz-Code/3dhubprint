@@ -18,6 +18,7 @@ import { ExcludeObjects } from '../components/printer/ExcludeObjects';
 import { FilesTab } from '../components/printer/FilesTab';
 import { HistoryTab } from '../components/printer/HistoryTab';
 import { ConsoleTab } from '../components/printer/ConsoleTab';
+import { QuickPrintButton } from '../components/printer/QuickPrint';
 import { thumbUrl } from '../lib/files';
 import { fileLabel, formatClock, formatDuration, formatFilament, formatTemp, isActivePrint, statusBadge } from '../lib/format';
 
@@ -57,6 +58,7 @@ export function PrinterPage() {
         <h1 className="min-w-0 truncate text-2xl font-semibold">{printer.name}</h1>
         <Badge tone={badge.tone}>{badge.label}</Badge>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          {isAdmin && printer.status.connection === 'connected' && <QuickPrintButton printer={printer} />}
           {isAdmin && <PrintControls printer={printer} />}
           <a
             href={printer.url}

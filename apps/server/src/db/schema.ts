@@ -140,7 +140,24 @@ export const jobs = sqliteTable('jobs', {
   filamentMm: real('filament_mm'),
   filamentG: real('filament_g'),
   note: text('note'),
+  /** JSON: SliceOverrides */
+  overrides: text('overrides').notNull().default('{}'),
   createdBy: integer('created_by'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
+
+export const jobModels = sqliteTable(
+  'job_models',
+  {
+    jobId: integer('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    modelId: integer('model_id')
+      .notNull()
+      .references(() => models.id),
+    copies: integer('copies').notNull().default(1),
+    position: integer('position').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.jobId, t.modelId] })],
+);

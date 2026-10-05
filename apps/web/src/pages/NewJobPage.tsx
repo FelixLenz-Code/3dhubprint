@@ -1,55 +1,67 @@
-import { useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Box, Check, Trash2, Upload } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { AlertTriangle, ArrowLeft, Check } from 'lucide-react';
 import clsx from 'clsx';
-import type { JobInfo, ModelInfo, PrinterProfileAssignment, SlicerProfileInfo } from '@printhub/shared';
-import { api, uploadWithProgress } from '../lib/api';
-import { confirm, toast, useAction } from '../lib/feedback';
+import type { JobInfo, ModelInfo, PrinterProfileAssignment, SliceOverrides, SlicerProfileInfo } from '@printhub/shared';
+import { api } from '../lib/api';
+import { useAction } from '../lib/feedback';
 import { formatDims } from '../lib/jobs';
 import { live, useLive } from '../lib/live';
-import { formatBytes } from '../lib/files';
 import { allowedProfiles } from '../lib/profiles';
-import { Alert, Button, Card, Field, Input, ProgressBar, Spinner } from '../components/ui';
+import { Alert, Button, Card, Field, Input } from '../components/ui';
+import { ModelPicker, type PlateItem } from '../components/slicing/ModelPicker';
+import { ProfileSelect, describeFilament, describeProcess } from '../components/slicing/ProfileSelect';
+import { SliceOptions } from '../components/slicing/SliceOptions';
 
-const MODEL_EXT = /\.(stl|3mf|obj)$/i;
-
-export function NewJobPage() {
-  const navigate = useNavigate();
+/** All printers' profile assignments (for printer cards and profile filtering). */
+export function useAssignments() {
   const printers = useLive((s) => s.printers);
-  const qc = useQueryClient();
-  const models = useQuery({ queryKey: ['models'], queryFn: () => api<ModelInfo[]>('/models') });
-  const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api<SlicerProfileInfo[]>('/slicer/profiles') });
-  const assignments = useQuery({
+  return useQuery({
     queryKey: ['assignments', printers.map((p) => p.id).join(',')],
     queryFn: () => Promise.all(printers.map((p) => api<PrinterProfileAssignment>(`/printers/${p.id}/profiles`))),
     enabled: printers.length > 0,
   });
+}
 
-  const [modelId, setModelId] = useState<number>();
+/** Models that exceed the printer's build volume in any lying orientation. */
+export function oversized(models: ModelInfo[], machine: SlicerProfileInfo | undefined): ModelInfo[] {
+  if (!machine) return [];
+  const { bedX, bedY, height } = machine.summary as { bedX?: number; bedY?: number; height?: number };
+  const big = Math.max(bedX ?? Infinity, bedY ?? Infinity);
+  const small = Math.min(bedX ?? Infinity, bedY ?? Infinity);
+  return models.filter(({ dimensions: [x, y, z] }) => !(Math.max(x, y) <= big && Math.min(x, y) <= small && z <= (height ?? Infinity)));
+}
+
+export function NewJobPage() {
+  const navigate = useNavigate();
+  const printers = useLive((s) => s.printers);
+  const models = useQuery({ queryKey: ['models'], queryFn: () => api<ModelInfo[]>('/models') });
+  const profiles = useQuery({ queryKey: ['profiles'], queryFn: () => api<SlicerProfileInfo[]>('/slicer/profiles') });
+  const assignments = useAssignments();
+
+  const [items, setItems] = useState<PlateItem[]>([]);
   const [printerId, setPrinterId] = useState<number>();
   const [proc, setProc] = useState('');
   const [fil, setFil] = useState('');
-  const [copies, setCopies] = useState(1);
+  const [overrides, setOverrides] = useState<SliceOverrides>({});
   const [autoOrient, setAutoOrient] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
   const [note, setNote] = useState('');
   const { busy, run } = useAction();
 
-  const model = models.data?.find((m) => m.id === modelId);
   const assignment = assignments.data?.find((a) => a.printerId === printerId);
-  const byKind = (kind: string) => profiles.data?.filter((p) => p.kind === kind) ?? [];
-  const machine = byKind('machine').find((p) => p.name === assignment?.machine);
+  const machine = profiles.data?.find((p) => p.kind === 'machine' && p.name === assignment?.machine);
   const processes = allowedProfiles('process', profiles.data ?? [], assignment);
   const filaments = allowedProfiles('filament', profiles.data ?? [], assignment);
+  const objectCount = items.reduce((n, i) => n + i.copies, 0);
+  const chosenModels = useMemo(() => items.map((i) => models.data?.find((m) => m.id === i.modelId)).filter((m): m is ModelInfo => !!m), [items, models.data]);
+  const tooBig = oversized(chosenModels, machine);
 
-  const fits = useMemo(() => {
-    if (!model || !machine) return true;
-    const { bedX, bedY, height } = machine.summary as { bedX?: number; bedY?: number; height?: number };
-    const [x, y, z] = model.dimensions;
-    const flat = Math.max(x, y) <= Math.max(bedX ?? Infinity, bedY ?? Infinity) && Math.min(x, y) <= Math.min(bedX ?? Infinity, bedY ?? Infinity);
-    return flat && z <= (height ?? Infinity);
-  }, [model, machine]);
+  // Vase mode needs exactly one object; drop it when the plate changes.
+  useEffect(() => {
+    if (overrides.vase && objectCount !== 1) setOverrides(({ vase: _, ...rest }) => rest);
+  }, [objectCount, overrides.vase]);
 
   const selectPrinter = (id: number) => {
     setPrinterId(id);
@@ -60,13 +72,13 @@ export function NewJobPage() {
   const submit = () =>
     run('create', async () => {
       const job = await api<JobInfo>('/jobs', {
-        body: { modelId, printerId, process: proc, filament: fil, copies, autoOrient, autoPrint, note: note || undefined },
+        body: { items, printerId, process: proc, filament: fil, autoOrient, autoPrint, overrides, note: note || undefined },
       });
       live.upsertJob(job);
       navigate('/jobs');
     });
 
-  const ready = modelId && printerId && proc && fil;
+  const ready = items.length > 0 && printerId && proc && fil;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -77,37 +89,18 @@ export function NewJobPage() {
         <h1 className="text-2xl font-semibold">Neuer Auftrag</h1>
       </header>
 
-      <Step n={1} title="Modell">
-        <ModelUpload
-          onUploaded={(m) => {
-            qc.setQueryData<ModelInfo[]>(['models'], (old) => [m, ...(old ?? []).filter((x) => x.id !== m.id)]);
-            setModelId(m.id);
-          }}
-        />
-        {models.isLoading ? (
-          <Spinner />
-        ) : (
-          <ModelLibrary
-            models={models.data ?? []}
-            selected={modelId}
-            onSelect={setModelId}
-            onDeleted={(id) => {
-              qc.setQueryData<ModelInfo[]>(['models'], (old) => old?.filter((m) => m.id !== id));
-              if (id === modelId) setModelId(undefined);
-            }}
-          />
-        )}
+      <Step n={1} title="Modelle">
+        <ModelPicker value={items} onChange={setItems} />
       </Step>
 
       <Step n={2} title="Drucker">
         <div className="grid gap-2 sm:grid-cols-2">
           {printers.map((p) => {
             const a = assignments.data?.find((x) => x.printerId === p.id);
-            const usable = !!a?.machine;
             return (
               <button
                 key={p.id}
-                disabled={!usable}
+                disabled={!a?.machine}
                 onClick={() => selectPrinter(p.id)}
                 className={clsx(
                   'flex items-start gap-3 rounded-xl border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
@@ -118,7 +111,7 @@ export function NewJobPage() {
                   <div className="font-medium">{p.name}</div>
                   <div className="truncate text-xs text-text-3">{a?.machine ?? 'Kein Druckerprofil zugeordnet'}</div>
                 </div>
-                {printerId === p.id && <Check className="size-5 text-accent" />}
+                {printerId === p.id && <Check className="size-5 shrink-0 text-accent" />}
               </button>
             );
           })}
@@ -131,11 +124,11 @@ export function NewJobPage() {
             </Link>
           </Alert>
         )}
-        {model && machine && !fits && (
+        {tooBig.length > 0 && machine && (
           <Alert tone="warning">
             <AlertTriangle className="mr-1 inline size-4" />
-            Das Modell ({formatDims(model.dimensions)}) ist größer als der Bauraum ({String(machine.summary.bedX)} × {String(machine.summary.bedY)} ×{' '}
-            {String(machine.summary.height)} mm). Ggf. „Automatisch ausrichten“ aktivieren.
+            Größer als der Bauraum ({String(machine.summary.bedX)} × {String(machine.summary.bedY)} × {String(machine.summary.height)} mm):{' '}
+            {tooBig.map((m) => `${m.name} (${formatDims(m.dimensions)})`).join(', ')}. Ggf. „Automatisch ausrichten“ aktivieren.
           </Alert>
         )}
       </Step>
@@ -144,19 +137,15 @@ export function NewJobPage() {
         {!printerId ? (
           <p className="text-sm text-text-3">Zuerst einen Drucker wählen.</p>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2">
-              <ProfilePicker label="Prozess (Qualität)" profiles={processes} value={proc} onChange={setProc} describe={describeProcess} />
-              <ProfilePicker label="Filament" profiles={filaments} value={fil} onChange={setFil} describe={describeFilament} />
+              <ProfileSelect label="Prozess (Qualität)" profiles={processes} value={proc} onChange={setProc} describe={describeProcess} />
+              <ProfileSelect label="Filament" profiles={filaments} value={fil} onChange={setFil} describe={describeFilament} />
             </div>
-            <div className="grid gap-4 sm:grid-cols-[8rem_1fr]">
-              <Field label="Kopien">
-                <Input type="number" min={1} max={50} value={copies} onChange={(e) => setCopies(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} />
-              </Field>
-              <Field label="Notiz (optional)">
-                <Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="z. B. für wen, Farbe…" />
-              </Field>
-            </div>
+            <SliceOptions value={overrides} onChange={setOverrides} process={processes.find((p) => p.name === proc)} objectCount={objectCount} />
+            <Field label="Notiz (optional)">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="z. B. für wen, Farbe…" />
+            </Field>
             <label className="flex items-center gap-2 text-sm text-text-2">
               <input type="checkbox" checked={autoOrient} onChange={(e) => setAutoOrient(e.target.checked)} className="accent-[var(--accent)]" />
               Automatisch ausrichten (OrcaSlicer wählt die beste Auflagefläche)
@@ -170,7 +159,10 @@ export function NewJobPage() {
         )}
       </Step>
 
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {items.length > 0 && <span className="mr-auto text-sm text-text-2">
+            {objectCount === 1 ? '1 Objekt' : `${objectCount} Objekte werden von OrcaSlicer auf dem Bett verteilt.`}
+          </span>}
         <Link to="/jobs">
           <Button variant="ghost">Abbrechen</Button>
         </Link>
@@ -192,184 +184,4 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
       {children}
     </Card>
   );
-}
-
-function ModelUpload({ onUploaded }: { onUploaded: (m: ModelInfo) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  const [drag, setDrag] = useState(false);
-  const [progress, setProgress] = useState<{ name: string; value: number } | null>(null);
-
-  const upload = async (file: File) => {
-    if (!MODEL_EXT.test(file.name)) return toast('Nur STL-, 3MF- oder OBJ-Dateien', 'critical');
-    const form = new FormData();
-    form.append('file', file, file.name);
-    setProgress({ name: file.name, value: 0 });
-    try {
-      onUploaded(await uploadWithProgress<ModelInfo>('/models', form, (v) => setProgress({ name: file.name, value: v })));
-    } catch (err) {
-      toast((err as Error).message, 'critical');
-    } finally {
-      setProgress(null);
-    }
-  };
-
-  return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDrag(true);
-      }}
-      onDragLeave={() => setDrag(false)}
-      onDrop={(e: DragEvent) => {
-        e.preventDefault();
-        setDrag(false);
-        const f = e.dataTransfer.files[0];
-        if (f) void upload(f);
-      }}
-      className={clsx('flex flex-wrap items-center gap-3 rounded-xl border-2 border-dashed px-4 py-4', drag ? 'border-accent bg-accent/5' : 'border-border')}
-    >
-      <input
-        ref={input}
-        type="file"
-        accept=".stl,.3mf,.obj"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = '';
-          if (f) void upload(f);
-        }}
-      />
-      {progress ? (
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="tabular flex justify-between gap-2 text-sm">
-            <span className="truncate">{progress.name}</span>
-            <span className="text-text-2">{progress.value < 1 ? `${Math.round(progress.value * 100)} %` : 'wird analysiert…'}</span>
-          </div>
-          <ProgressBar value={progress.value} />
-        </div>
-      ) : (
-        <>
-          <Button onClick={() => input.current?.click()}>
-            <Upload className="size-4" /> Modell hochladen
-          </Button>
-          <span className="text-sm text-text-3">STL, 3MF oder OBJ, auch per Drag & Drop</span>
-        </>
-      )}
-    </div>
-  );
-}
-
-function ModelLibrary({
-  models,
-  selected,
-  onSelect,
-  onDeleted,
-}: {
-  models: ModelInfo[];
-  selected?: number;
-  onSelect: (id: number) => void;
-  onDeleted: (id: number) => void;
-}) {
-  const [filter, setFilter] = useState('');
-  const { run } = useAction();
-  if (!models.length) return <p className="text-sm text-text-3">Die Modell-Bibliothek ist noch leer.</p>;
-  const shown = filter ? models.filter((m) => m.name.toLowerCase().includes(filter.toLowerCase())) : models;
-
-  const remove = async (m: ModelInfo) => {
-    if (await confirm({ title: 'Modell löschen?', body: `„${m.name}“ wird aus der Bibliothek entfernt.`, confirmLabel: 'Löschen', danger: true })) {
-      if (await run('del', () => api(`/models/${m.id}`, { method: 'DELETE' }))) onDeleted(m.id);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm text-text-2">Bibliothek ({models.length})</span>
-        {models.length > 6 && <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Suchen…" className="max-w-48" />}
-      </div>
-      <div className="grid max-h-[26rem] grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4">
-        {shown.map((m) => (
-          <div
-            key={m.id}
-            className={clsx(
-              'group relative rounded-xl border p-2 transition-colors',
-              selected === m.id ? 'border-accent bg-accent/5' : 'border-border hover:border-text-3',
-            )}
-          >
-            <button onClick={() => onSelect(m.id)} className="block w-full text-left">
-              <img src={m.thumbnailUrl} alt="" loading="lazy" className="aspect-square w-full rounded-lg bg-surface-2 object-contain" />
-              <div className="mt-1.5 truncate text-sm font-medium" title={m.name}>
-                {m.name}
-              </div>
-              <div className="tabular truncate text-xs text-text-3">
-                {formatDims(m.dimensions)} · {formatBytes(m.size)}
-              </div>
-            </button>
-            {selected === m.id && <Check className="absolute right-3 top-3 size-5 rounded-full bg-accent p-0.5 text-accent-ink" />}
-            <button
-              onClick={() => remove(m)}
-              className="absolute left-3 top-3 rounded-md bg-surface/90 p-1 text-text-3 opacity-0 transition-opacity hover:text-critical focus:opacity-100 group-hover:opacity-100"
-              aria-label={`${m.name} löschen`}
-            >
-              <Trash2 className="size-4" />
-            </button>
-          </div>
-        ))}
-        {!shown.length && (
-          <div className="col-span-full flex items-center gap-2 text-sm text-text-3">
-            <Box className="size-4" /> Keine Treffer
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ProfilePicker({
-  label,
-  profiles,
-  value,
-  onChange,
-  describe,
-}: {
-  label: string;
-  profiles: SlicerProfileInfo[];
-  value: string;
-  onChange: (v: string) => void;
-  describe: (p: SlicerProfileInfo) => string;
-}) {
-  return (
-    <Field label={label}>
-      <div className="space-y-1.5">
-        {profiles.length === 0 && <p className="text-sm text-text-3">Keine Profile verfügbar.</p>}
-        {profiles.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => onChange(p.name)}
-            className={clsx(
-              'flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left',
-              value === p.name ? 'border-accent bg-accent/5' : 'border-border hover:border-text-3',
-            )}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{p.name}</div>
-              <div className="truncate text-xs text-text-3">{describe(p)}</div>
-            </div>
-            {value === p.name && <Check className="size-4 shrink-0 text-accent" />}
-          </button>
-        ))}
-      </div>
-    </Field>
-  );
-}
-
-export function describeProcess(p: SlicerProfileInfo) {
-  const s = p.summary;
-  return [s.layerHeight && `${s.layerHeight} mm`, s.walls && `${s.walls} Wände`, s.infill && `${s.infill} Infill`, s.support && 'Stützen'].filter(Boolean).join(' · ');
-}
-
-export function describeFilament(p: SlicerProfileInfo) {
-  const s = p.summary;
-  return [s.material, s.nozzleTemp && `${s.nozzleTemp} °C`, s.bedTemp && `Bett ${s.bedTemp} °C`, s.flow && `Flow ${s.flow}`].filter(Boolean).join(' · ');
 }

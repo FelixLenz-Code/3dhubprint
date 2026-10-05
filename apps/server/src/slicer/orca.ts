@@ -15,8 +15,8 @@ export class SliceError extends Error {
 
 export interface SliceInput {
   workDir: string;
-  modelPath: string;
-  copies: number;
+  /** Models placed on one plate; Orca arranges all instances. */
+  models: { path: string; copies: number }[];
   autoOrient: boolean;
   machine: Record<string, unknown>;
   process: Record<string, unknown>;
@@ -54,7 +54,7 @@ export async function runOrca(bin: string, input: SliceInput, timeoutMs: number,
     '--load-settings', 'machine.json;process.json',
     '--load-filaments', 'filament.json',
     '--outputdir', 'out',
-    ...Array.from({ length: input.copies }, () => input.modelPath),
+    ...input.models.flatMap((m) => Array.from({ length: m.copies }, () => m.path)),
   ];
 
   let log = '';

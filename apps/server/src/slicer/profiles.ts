@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { unzipSync, strFromU8 } from 'fflate';
+import type { SliceOverrides } from '@printhub/shared';
 
 export type ProfileKind = 'machine' | 'process' | 'filament';
 type Json = Record<string, unknown>;
@@ -225,6 +226,14 @@ export function summarize(kind: ProfileKind, s: Json): ProfileSummary {
       infill: first(s.sparse_infill_density),
       infillPattern: first(s.sparse_infill_pattern),
       support: first(s.enable_support) === '1' || first(s.enable_support) === 'true',
+      supportType: first(s.support_type)?.startsWith('tree') ? 'tree' : 'normal',
+      supportBuildPlateOnly: first(s.support_on_build_plate_only) === '1',
+      supportAngle: num(s.support_threshold_angle),
+      brimType: BRIM_FROM_ORCA[first(s.brim_type) ?? ''] ?? 'auto',
+      brimWidth: num(s.brim_width),
+      skirtLoops: num(s.skirt_loops),
+      skirtDistance: num(s.skirt_distance),
+      vase: first(s.spiral_mode) === '1',
     };
   }
   return {
@@ -236,6 +245,42 @@ export function summarize(kind: ProfileKind, s: Json): ProfileSummary {
     density: num(s.filament_density),
     cost: num(s.filament_cost),
   };
+}
+
+const BRIM_TO_ORCA = { none: 'no_brim', outer: 'outer_only', auto: 'auto_brim', ears: 'brim_ears' } as const;
+const BRIM_FROM_ORCA: Record<string, keyof typeof BRIM_TO_ORCA> = Object.fromEntries(
+  Object.entries(BRIM_TO_ORCA).map(([k, v]) => [v, k as keyof typeof BRIM_TO_ORCA]),
+);
+
+/** Applies per-job overrides (support, brim, skirt, vase) to resolved process settings. */
+export function applyOverrides(process: Json, o: SliceOverrides): Json {
+  const s: Json = { ...process };
+  const bool = (b: boolean) => (b ? '1' : '0');
+  if (o.support) {
+    s.enable_support = bool(o.support.enabled);
+    s.support_type = o.support.type === 'tree' ? 'tree(auto)' : 'normal(auto)';
+    s.support_on_build_plate_only = bool(o.support.buildPlateOnly);
+    if (o.support.angle !== undefined) s.support_threshold_angle = String(o.support.angle);
+  }
+  if (o.brim) {
+    s.brim_type = BRIM_TO_ORCA[o.brim.type];
+    if (o.brim.width !== undefined) s.brim_width = String(o.brim.width);
+  }
+  if (o.skirt) {
+    s.skirt_loops = String(o.skirt.loops);
+    if (o.skirt.distance !== undefined) s.skirt_distance = String(o.skirt.distance);
+  }
+  if (o.vase) {
+    // What OrcaSlicer's GUI enforces when enabling spiral vase.
+    s.spiral_mode = '1';
+    s.wall_loops = '1';
+    s.top_shell_layers = '0';
+    s.sparse_infill_density = '0%';
+    s.enable_support = '0';
+  } else if (o.vase === false) {
+    s.spiral_mode = '0';
+  }
+  return s;
 }
 
 /**

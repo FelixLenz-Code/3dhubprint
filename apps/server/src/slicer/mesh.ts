@@ -156,6 +156,35 @@ export function parse3mf(buf: Buffer): Mesh {
   return { triangles: Float32Array.from(out) };
 }
 
+/**
+ * Places several meshes (with copies) side by side on a grid, only for preview images;
+ * the real arrangement is done by Orca. Renders at most 16 instances.
+ */
+export function layoutForPreview(items: { mesh: Mesh; copies: number }[]): Mesh {
+  const instances = items.flatMap((i) => Array.from({ length: i.copies }, () => i.mesh)).slice(0, 16);
+  if (instances.length === 1) return instances[0]!;
+  const infos = instances.map((m) => meshInfo(m));
+  const cols = Math.ceil(Math.sqrt(instances.length));
+  const gap = 5;
+  const colWidth = Math.max(...infos.map((i) => i.size[0])) + gap;
+  const rowDepth = Math.max(...infos.map((i) => i.size[1])) + gap;
+  const total = instances.reduce((n, m) => n + m.triangles.length, 0);
+  const out = new Float32Array(total);
+  let o = 0;
+  instances.forEach((m, idx) => {
+    const info = infos[idx]!;
+    const dx = (idx % cols) * colWidth - info.min[0];
+    const dy = Math.floor(idx / cols) * rowDepth - info.min[1];
+    const dz = -info.min[2];
+    for (let i = 0; i < m.triangles.length; i += 3) {
+      out[o++] = m.triangles[i]! + dx;
+      out[o++] = m.triangles[i + 1]! + dy;
+      out[o++] = m.triangles[i + 2]! + dz;
+    }
+  });
+  return { triangles: out };
+}
+
 export interface MeshInfo {
   triangles: number;
   size: [number, number, number];

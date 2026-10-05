@@ -5,18 +5,20 @@ import { SecuritySettings } from './settings/SecuritySettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
 import { SlicerSettings } from './settings/SlicerSettings';
 
+// Absolute paths: inside the "settings/*" splat route, relative links would resolve
+// against the current sub-page (e.g. /settings/printers/slicer).
 const TABS = [
-  { to: 'printers', label: 'Drucker' },
-  { to: 'slicer', label: 'Slicer' },
-  { to: 'security', label: 'Sicherheit' },
-  { to: 'appearance', label: 'Darstellung' },
+  { to: '/settings/printers', label: 'Drucker' },
+  { to: '/settings/slicer', label: 'Slicer' },
+  { to: '/settings/security', label: 'Sicherheit' },
+  { to: '/settings/appearance', label: 'Darstellung' },
 ];
 
 export function SettingsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <h1 className="text-2xl font-semibold">Einstellungen</h1>
-      <nav className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border">
+      <nav className="-mx-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border px-4 sm:mx-0 sm:px-0" aria-label="Einstellungen">
         {TABS.map((t) => (
           <NavLink
             key={t.to}
@@ -33,7 +35,7 @@ export function SettingsPage() {
         ))}
       </nav>
       <Routes>
-        <Route index element={<Navigate to="printers" replace />} />
+        <Route index element={<Navigate to="/settings/printers" replace />} />
         <Route path="printers" element={<PrinterSettings />} />
         <Route path="slicer" element={<SlicerSettings />} />
         <Route path="security" element={<SecuritySettings />} />

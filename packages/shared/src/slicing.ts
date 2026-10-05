@@ -60,12 +60,56 @@ export interface ModelInfo {
 
 export type JobStatus = 'queued' | 'slicing' | 'sliced' | 'uploading' | 'uploaded' | 'printing' | 'failed' | 'cancelled';
 
+/**
+ * Per-job changes on top of the process profile. Omitted sections keep the profile's values.
+ */
+export const sliceOverridesSchema = z
+  .object({
+    support: z
+      .object({
+        enabled: z.boolean(),
+        type: z.enum(['normal', 'tree']).default('tree'),
+        buildPlateOnly: z.boolean().default(false),
+        /** Overhang angle (°) from which support is generated. */
+        angle: z.number().int().min(0).max(90).optional(),
+      })
+      .optional(),
+    brim: z
+      .object({
+        type: z.enum(['none', 'outer', 'auto', 'ears']),
+        width: z.number().min(0).max(50).optional(),
+      })
+      .optional(),
+    skirt: z
+      .object({
+        loops: z.number().int().min(0).max(20),
+        distance: z.number().min(0).max(50).optional(),
+      })
+      .optional(),
+    /** Spiral vase: one wall, no top layers, no infill. Only for a single object. */
+    vase: z.boolean().optional(),
+  })
+  .strict();
+export type SliceOverrides = z.infer<typeof sliceOverridesSchema>;
+
+export interface JobModel {
+  id: number;
+  name: string;
+  thumbnailUrl: string;
+  dimensions: [number, number, number];
+  copies: number;
+}
+
 export interface JobInfo {
   id: number;
   status: JobStatus;
-  model: { id: number; name: string; thumbnailUrl: string; dimensions: [number, number, number] };
+  /** First model (for compact displays); all models are in `models`. */
+  model: JobModel;
+  models: JobModel[];
+  overrides: SliceOverrides;
   printer: { id: number; name: string } | null;
   profiles: Record<ProfileKind, { id: number; name: string; version: number }>;
+  /** Total number of objects on the plate. */
   copies: number;
   autoOrient: boolean;
   autoPrint: boolean;
@@ -80,16 +124,26 @@ export interface JobInfo {
   updatedAt: number;
 }
 
-export const createJobSchema = z.object({
-  modelId: z.number().int().positive(),
-  printerId: z.number().int().positive(),
-  process: z.string().min(1).max(256),
-  filament: z.string().min(1).max(256),
-  copies: z.number().int().min(1).max(50).default(1),
-  autoOrient: z.boolean().default(false),
-  autoPrint: z.boolean().default(false),
-  note: z.string().trim().max(500).optional(),
-});
+export const MAX_PLATE_OBJECTS = 100;
+
+export const createJobSchema = z
+  .object({
+    /** Models to place on one plate; Orca arranges them automatically. */
+    items: z
+      .array(z.object({ modelId: z.number().int().positive(), copies: z.number().int().min(1).max(50).default(1) }))
+      .min(1, 'Mindestens ein Modell wählen')
+      .max(20, 'Höchstens 20 verschiedene Modelle pro Auftrag'),
+    printerId: z.number().int().positive(),
+    process: z.string().min(1).max(256),
+    filament: z.string().min(1).max(256),
+    autoOrient: z.boolean().default(false),
+    autoPrint: z.boolean().default(false),
+    overrides: sliceOverridesSchema.default({}),
+    note: z.string().trim().max(500).optional(),
+  })
+  .refine((j) => new Set(j.items.map((i) => i.modelId)).size === j.items.length, 'Jedes Modell nur einmal auswählen (Stückzahl stattdessen erhöhen)')
+  .refine((j) => j.items.reduce((n, i) => n + i.copies, 0) <= MAX_PLATE_OBJECTS, `Höchstens ${MAX_PLATE_OBJECTS} Objekte pro Druckbett`)
+  .refine((j) => !j.overrides.vase || (j.items.length === 1 && j.items[0]!.copies === 1), 'Der Vasenmodus funktioniert nur mit genau einem Objekt');
 export type CreateJobInput = z.input<typeof createJobSchema>;
 
 export const sendJobSchema = z.object({

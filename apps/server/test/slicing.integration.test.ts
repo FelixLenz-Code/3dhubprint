@@ -164,14 +164,14 @@ describe('models and jobs', () => {
     const list = (await api('/api/slicer/profiles')).body as { name: string; compatiblePrinters: string[] }[];
     expect(list.find((p) => p.name === 'Generic PLA K1')?.compatiblePrinters).toEqual(['Creality K1 (0.4 nozzle)']);
     const r = await api('/api/jobs', {
-      body: { modelId, printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Generic PLA K1' },
+      body: { items: [{ modelId }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Generic PLA K1' },
     });
     expect(r.status).toBe(400);
   });
 
   it('only allows profiles released for the printer', async () => {
     const r = await api('/api/jobs', {
-      body: { modelId, printerId, process: 'Tuned (Claude) - Gridfinity', filament: 'Tuned (Claude) - PLA' },
+      body: { items: [{ modelId }], printerId, process: 'Tuned (Claude) - Gridfinity', filament: 'Tuned (Claude) - PLA' },
     });
     expect(r.status).toBe(400);
     expect(r.body.message).toContain('nicht freigegeben');
@@ -179,7 +179,7 @@ describe('models and jobs', () => {
 
   it('slices a job with copies, embeds thumbnails and sends it to the printer', async () => {
     const created = await api('/api/jobs', {
-      body: { modelId, printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA', copies: 3 },
+      body: { items: [{ modelId, copies: 3 }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA' },
     });
     expect(created.status).toBe(201);
     expect(created.body.profiles.filament).toMatchObject({ name: 'Tuned (Claude) - PLA', version: 2 });
@@ -216,7 +216,7 @@ describe('models and jobs', () => {
       method: 'PUT',
       body: { machine: 'Tuned (Claude) - Ender-3 S1 Plus 0.4', process: [], filament: [] },
     });
-    const id = (await api('/api/jobs', { body: { modelId, printerId, process: 'FAIL', filament: 'Tuned (Claude) - PLA' } })).body.id;
+    const id = (await api('/api/jobs', { body: { items: [{ modelId }], printerId, process: 'FAIL', filament: 'Tuned (Claude) - PLA' } })).body.id;
     const job = await until(async () => {
       const j = (await api(`/api/jobs/${id}`)).body as JobInfo;
       return j.status === 'failed' ? j : undefined;
@@ -224,6 +224,55 @@ describe('models and jobs', () => {
     expect(job.error).toContain('not compatible');
     expect((await api(`/api/jobs/${id}/send`, { body: { print: false } })).status).toBe(409);
     expect((await api(`/api/jobs/${id}/retry`, { body: {} })).body.status).toBe('queued');
+  });
+
+  it('puts several models with overrides on one plate', async () => {
+    const f = new FormData();
+    f.append('file', new Blob([new Uint8Array(cubeStl(10))]), 'Klein.stl');
+    const small = (await api('/api/models', { form: f })).body.id;
+    await api(`/api/printers/${printerId}/profiles`, {
+      method: 'PUT',
+      body: { machine: 'Tuned (Claude) - Ender-3 S1 Plus 0.4', process: [], filament: [] },
+    });
+    const r = await api('/api/jobs', {
+      body: {
+        items: [{ modelId, copies: 2 }, { modelId: small, copies: 3 }],
+        printerId,
+        process: 'Tuned (Claude) - 0.20mm Standard',
+        filament: 'Tuned (Claude) - PLA',
+        overrides: { support: { enabled: true, type: 'tree', buildPlateOnly: true }, brim: { type: 'outer', width: 8 }, skirt: { loops: 2 } },
+      },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.copies).toBe(5);
+    expect(r.body.models.map((m: { name: string; copies: number }) => [m.name, m.copies])).toEqual([['Würfel 20mm', 2], ['Klein', 3]]);
+    const job = await until(async () => {
+      const j = (await api(`/api/jobs/${r.body.id}`)).body as JobInfo;
+      return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+    });
+    expect(job.status).toBe('sliced');
+    expect(job.gcodeName).toBe('Wuerfel_20mm_+1_PLA_1h2m.gcode');
+    const gcode = (await api(`/api/jobs/${job.id}/gcode`)).body.toString();
+    expect(gcode).toContain('; copies = 5');
+    expect(gcode).toContain('; enable_support = 1');
+    expect(gcode).toContain('; support_type = tree(auto)');
+    expect(gcode).toContain('; brim_type = outer_only');
+    expect(gcode).toContain('; brim_width = 8');
+    expect(gcode).toContain('; skirt_loops = 2');
+  });
+
+  it('enables vase mode with the settings Orca requires, for a single object only', async () => {
+    const base = { printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA', overrides: { vase: true } };
+    const bad = await api('/api/jobs', { body: { ...base, items: [{ modelId, copies: 2 }] } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.message).toContain('Vasenmodus');
+    const r = await api('/api/jobs', { body: { ...base, items: [{ modelId }] } });
+    const job = await until(async () => {
+      const j = (await api(`/api/jobs/${r.body.id}`)).body as JobInfo;
+      return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+    });
+    const gcode = (await api(`/api/jobs/${job.id}/gcode`)).body.toString();
+    for (const line of ['; spiral_mode = 1', '; wall_loops = 1', '; sparse_infill_density = 0%', '; enable_support = 0']) expect(gcode).toContain(line);
   });
 
   it('protects models that are still used by jobs', async () => {

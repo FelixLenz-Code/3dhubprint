@@ -27,9 +27,13 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
 2. **Zuordnung:** Jedem Drucker ein Druckerprofil zuweisen. Prozess- und Filamentprofile sind
    automatisch auf die passenden beschränkt (`compatible_printers`), lassen sich aber auch
    ausdrücklich freigeben.
-3. **Aufträge → Neuer Auftrag:** Modell hochladen oder aus der Bibliothek wählen, Drucker,
-   Qualität, Filament, Kopien (automatisch angeordnet) und optional automatisches Ausrichten.
-   Nach dem Slicen: *Drucken*, *Nur übertragen* oder G-Code herunterladen.
+3. **Aufträge → Neuer Auftrag:** Ein oder mehrere Modelle hochladen bzw. aus der Bibliothek
+   wählen (je mit Stückzahl, OrcaSlicer verteilt alles auf dem Bett), Drucker, Qualität,
+   Filament und bei Bedarf Abweichungen vom Profil: Stützen (Baum/Normal, nur auf dem Bett,
+   Überhangwinkel), Brim, Skirt und Vasenmodus. Nach dem Slicen: *Drucken*, *Nur übertragen*
+   oder G-Code herunterladen.
+4. **Schnelldruck** auf jeder Druckerseite: Modelle hochladen → Druckdauer, Filament und
+   Materialkosten ansehen → *Drucken*. Vorbelegt mit den zuletzt genutzten Profilen.
 
 Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in den G-Code ein
 (Größen aus der Einstellung `thumbnails` des Druckerprofils, sonst 32 und 300 px).

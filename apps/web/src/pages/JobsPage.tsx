@@ -10,6 +10,7 @@ import { formatDuration, formatFilament, isActivePrint } from '../lib/format';
 import { JOB_STATUS, formatDims, useJobs } from '../lib/jobs';
 import { useLive } from '../lib/live';
 import { Alert, Badge, Button, Card, Spinner } from '../components/ui';
+import { describeOverrides } from '../components/slicing/SliceOptions';
 
 export function JobsPage() {
   const jobs = useJobs();
@@ -82,7 +83,7 @@ function JobRow({ job, editable }: { job: JobInfo; editable: boolean }) {
         title: 'Druck starten?',
         body: (
           <>
-            „{job.model.name}“ wird an <b>{job.printer?.name}</b> gesendet und sofort gedruckt. Ist das Druckbett frei und sauber?
+            „{job.models.map((m) => m.name).join(', ')}“ wird an <b>{job.printer?.name}</b> gesendet und sofort gedruckt. Ist das Druckbett frei und sauber?
           </>
         ),
         confirmLabel: 'Drucken',
@@ -113,11 +114,17 @@ function JobRow({ job, editable }: { job: JobInfo; editable: boolean }) {
   return (
     <div className="space-y-3 p-4">
       <div className="flex gap-4">
-        <img src={job.model.thumbnailUrl} alt="" loading="lazy" className="size-16 shrink-0 rounded-lg bg-surface-2 object-contain sm:size-20" />
+        <div className="relative shrink-0">
+          <img src={job.model.thumbnailUrl} alt="" loading="lazy" className="size-16 rounded-lg bg-surface-2 object-contain sm:size-20" />
+          {job.models.length > 1 && (
+            <span className="absolute -bottom-1 -right-1 rounded-full border-2 border-surface bg-accent px-1.5 text-xs font-semibold text-accent-ink">
+              +{job.models.length - 1}
+            </span>
+          )}
+        </div>
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate font-medium">{job.model.name}</span>
-            {job.copies > 1 && <span className="text-sm text-text-2">× {job.copies}</span>}
+            <span className="min-w-0 break-words font-medium">{job.models.map((m) => (m.copies > 1 ? `${m.name} ×${m.copies}` : m.name)).join(', ')}</span>
             <Badge tone={st.tone}>
               {working && <Spinner className="size-3" />}
               {st.label}
@@ -127,13 +134,22 @@ function JobRow({ job, editable }: { job: JobInfo; editable: boolean }) {
             {job.printer?.name ?? 'gelöschter Drucker'} · {job.profiles.process.name} · {job.profiles.filament.name}
           </div>
           <div className="tabular text-xs text-text-3">
-            {formatDims(job.model.dimensions)}
+            {job.models.length === 1 ? formatDims(job.model.dimensions) : `${job.copies} Objekte`}
             {job.estimatedTime !== null && ` · ${formatDuration(job.estimatedTime)}`}
             {job.filamentMm !== null && ` · ${formatFilament(job.filamentMm)}`}
             {job.filamentG !== null && ` · ${job.filamentG.toFixed(1).replace('.', ',')} g`}
             {' · '}
             {new Date(job.createdAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
           </div>
+          {describeOverrides(job.overrides).length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {describeOverrides(job.overrides).map((t) => (
+                <span key={t} className="rounded-md bg-surface-2 px-1.5 py-0.5 text-xs text-text-2">
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
           {job.note && <div className="text-xs text-text-2">{job.note}</div>}
         </div>
       </div>

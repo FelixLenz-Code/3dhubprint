@@ -50,7 +50,7 @@ function PasswordCard() {
         <Field label="Aktuelles Passwort">
           <Input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
         </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid items-start gap-4 sm:grid-cols-2">
           <Field label="Neues Passwort" hint="Mindestens 12 Zeichen">
             <Input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} required minLength={12} />
           </Field>
@@ -127,8 +127,8 @@ function TotpCard() {
 
   return (
     <Card className="p-5">
-      <div className="mb-4 flex items-center gap-3">
-        {enabled ? <ShieldCheck className="size-5 text-good" /> : <ShieldOff className="size-5 text-warning" />}
+      <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {enabled ? <ShieldCheck className="size-5 shrink-0 text-good" /> : <ShieldOff className="size-5 shrink-0 text-warning" />}
         <h2 className="font-semibold">Zwei-Faktor-Anmeldung</h2>
         {status.data && <Badge tone={enabled ? 'good' : 'warning'}>{enabled ? 'Aktiv' : 'Nicht aktiv'}</Badge>}
       </div>
@@ -252,7 +252,7 @@ function SessionsCard() {
 
   return (
     <Card className="p-5">
-      <div className="mb-4 flex items-center justify-between gap-2">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-semibold">Angemeldete Geräte</h2>
         {(sessions.data?.length ?? 0) > 1 && (
           <Button variant="secondary" onClick={() => api('/auth/sessions/revoke-others', { method: 'POST' }).then(reload)}>

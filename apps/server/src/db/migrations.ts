@@ -124,4 +124,17 @@ export const migrations: string[] = [
   );
   CREATE INDEX jobs_status_idx ON jobs (status);
   `,
+  `
+  -- Several models per job (each with its own number of copies) and per-job setting overrides.
+  CREATE TABLE job_models (
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    model_id INTEGER NOT NULL REFERENCES models(id),
+    copies INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (job_id, model_id)
+  );
+  CREATE INDEX job_models_model_idx ON job_models (model_id);
+  INSERT INTO job_models (job_id, model_id, copies, position) SELECT id, model_id, copies, 0 FROM jobs;
+  ALTER TABLE jobs ADD COLUMN overrides TEXT NOT NULL DEFAULT '{}';
+  `,
 ];

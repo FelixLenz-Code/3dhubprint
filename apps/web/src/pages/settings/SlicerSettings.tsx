@@ -7,7 +7,7 @@ import { api, uploadWithProgress } from '../../lib/api';
 import { confirm, toast, useAction } from '../../lib/feedback';
 import { useLive } from '../../lib/live';
 import { Alert, Badge, Button, Card, Spinner } from '../../components/ui';
-import { describeFilament, describeProcess } from '../NewJobPage';
+import { describeFilament, describeProcess } from '../../components/slicing/ProfileSelect';
 import { isCompatible } from '../../lib/profiles';
 
 const KIND_LABEL: Record<ProfileKind, string> = { machine: 'Drucker', process: 'Prozesse', filament: 'Filamente' };
@@ -20,7 +20,7 @@ export function SlicerSettings() {
   return (
     <div className="space-y-6">
       <Card className="p-5">
-        <div className="mb-1 flex items-center gap-2">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
           <h2 className="font-semibold">OrcaSlicer</h2>
           {status.data && <Badge tone={status.data.available ? 'good' : 'warning'}>{status.data.available ? `Version ${status.data.orcaVersion}` : 'nicht verfügbar'}</Badge>}
         </div>
@@ -113,7 +113,7 @@ function ImportCard() {
         <Button onClick={() => input.current?.click()} loading={busy}>
           <Upload className="size-4" /> Dateien wählen
         </Button>
-        <span className="text-sm text-text-3">oder hierher ziehen (mehrere Dateien möglich)</span>
+        <span className="hidden text-sm text-text-3 sm:inline">oder hierher ziehen (mehrere Dateien möglich)</span>
       </div>
       {result && (
         <div className="space-y-1 text-sm">
@@ -173,10 +173,10 @@ function ProfileList({ profiles }: { profiles: SlicerProfileInfo[] }) {
                 <li key={p.id} className="flex items-center gap-3 px-3 py-2">
                   <FileJson className="size-4 shrink-0 text-text-3" />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">
-                      {p.name} <span className="font-normal text-text-3">v{p.version}</span>
+                    <div className="break-words text-sm font-medium">
+                      {p.name} <span className="whitespace-nowrap font-normal text-text-3">v{p.version}</span>
                     </div>
-                    <div className="truncate text-xs text-text-3">
+                    <div className="text-xs leading-relaxed text-text-3">
                       {kind === 'machine'
                         ? `${String(p.summary.bedX)} × ${String(p.summary.bedY)} × ${String(p.summary.height)} mm · Düse ${String(p.summary.nozzle)} mm · Basis: ${p.systemPrinter}`
                         : kind === 'process'
@@ -232,12 +232,12 @@ function AssignmentEditor({ printer, profiles }: { printer: PrinterSummary; prof
 
   return (
     <div className="space-y-3 py-4 first:pt-0 last:pb-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{printer.name}</span>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <span className="font-medium sm:w-40 sm:shrink-0 sm:truncate">{printer.name}</span>
         <select
           value={draft.machine ?? ''}
           onChange={(e) => setDraft({ ...draft, machine: e.target.value || null })}
-          className="min-h-10 min-w-0 flex-1 rounded-lg border border-border bg-surface px-3 text-sm"
+          className="min-h-10 w-full min-w-0 rounded-lg border border-border bg-surface px-3 text-sm text-text sm:flex-1"
           aria-label={`Druckerprofil für ${printer.name}`}
         >
           <option value="">– kein Druckerprofil –</option>
@@ -257,11 +257,16 @@ function AssignmentEditor({ printer, profiles }: { printer: PrinterSummary; prof
                 <legend className="mb-1 text-xs text-text-3">
                   {KIND_LABEL[kind]} {draft[kind].length === 0 && '(keine Auswahl = alle passenden)'}
                 </legend>
-                <div className="max-h-48 space-y-1 overflow-y-auto">
+                <div className="max-h-56 overflow-y-auto">
                   {list.map((p) => (
-                    <label key={p.id} className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" checked={draft[kind].includes(p.name)} onChange={() => toggle(kind, p.name)} className="accent-[var(--accent)]" />
-                      <span className={clsx('truncate', !isCompatible(p, machine) && 'text-text-3')}>{p.name}</span>
+                    <label key={p.id} className="flex min-w-0 items-start gap-2 py-0.5 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={draft[kind].includes(p.name)}
+                        onChange={() => toggle(kind, p.name)}
+                        className="mt-1 shrink-0 accent-[var(--accent)]"
+                      />
+                      <span className={clsx('min-w-0 flex-1 break-words', !isCompatible(p, machine) && 'text-text-3')}>{p.name}</span>
                       {isCompatible(p, machine) ? (
                         <span className="shrink-0 text-xs text-good">passt</span>
                       ) : (

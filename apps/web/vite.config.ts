@@ -11,6 +11,8 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      // Registered from main.tsx so the page reloads itself when a new version is deployed.
+      injectRegister: false,
       includeAssets: ['icon.svg'],
       manifest: {
         name: 'PrintHub',

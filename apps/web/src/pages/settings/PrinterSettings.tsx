@@ -3,7 +3,7 @@ import { Pencil, Plus, Trash2, Plug } from 'lucide-react';
 import type { PrinterSummary } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { useLive } from '../../lib/live';
-import { statusBadge } from '../../lib/format';
+import type { Tone } from '../../lib/format';
 import { Alert, Badge, Button, Card, Field, Input } from '../../components/ui';
 
 type TestResult = { ok: true; moonrakerVersion: string; klippyState: string } | { ok: false; message: string };
@@ -27,7 +27,7 @@ export function PrinterSettings() {
       <Card className="divide-y divide-border">
         {printers.length === 0 && <p className="p-5 text-sm text-text-3">Noch keine Drucker angelegt.</p>}
         {printers.map((p) => {
-          const badge = statusBadge(p.status);
+          const badge = connectionBadge(p);
           return (
             <div key={p.id} className="flex items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
@@ -35,7 +35,7 @@ export function PrinterSettings() {
                   <span className="font-medium">{p.name}</span>
                   <Badge tone={badge.tone}>{badge.label}</Badge>
                 </div>
-                <div className="truncate text-xs text-text-3">
+                <div className="break-all text-xs text-text-3">
                   {p.url}
                   {p.hasApiKey && ' · API-Key hinterlegt'}
                 </div>
@@ -50,6 +50,22 @@ export function PrinterSettings() {
       </Card>
     </div>
   );
+}
+
+/** In settings the connection matters, not the print state. */
+function connectionBadge(p: PrinterSummary): { label: string; tone: Tone } {
+  switch (p.status.connection) {
+    case 'connected':
+      return { label: 'Verbunden', tone: 'good' };
+    case 'klippy_not_ready':
+      return { label: 'Klipper nicht bereit', tone: 'warning' };
+    case 'connecting':
+      return { label: 'Verbinde…', tone: 'neutral' };
+    case 'disabled':
+      return { label: 'Deaktiviert', tone: 'neutral' };
+    default:
+      return { label: 'Offline', tone: 'critical' };
+  }
 }
 
 function DeleteButton({ printer }: { printer: PrinterSummary }) {

@@ -7,6 +7,8 @@ import type { FastifyBaseLogger } from 'fastify';
 import type {
   CreateJobInput,
   JobInfo,
+  JobModel,
+  SliceOverrides,
   ModelInfo,
   PrinterProfileAssignment,
   ProfileImportResult,
@@ -16,11 +18,22 @@ import type {
 } from '@printhub/shared';
 import { createJobSchema } from '@printhub/shared';
 import type { Db } from '../db/index.js';
-import { jobs, models, printerProfiles, printers, slicerProfiles } from '../db/schema.js';
+import { jobModels, jobs, models, printerProfiles, printers, slicerProfiles } from '../db/schema.js';
 import type { PrinterManager } from '../printers/manager.js';
 import { uploadToPrinter } from '../printers/upload.js';
-import { ProfileError, SystemProfiles, cliProfiles, detectKind, isCompatible, readUpload, resolvePreset, summarize, type UploadedPreset } from './profiles.js';
-import { MeshError, formatOf, meshInfo, parseModel, renderThumbnail } from './mesh.js';
+import {
+  ProfileError,
+  SystemProfiles,
+  applyOverrides,
+  cliProfiles,
+  detectKind,
+  isCompatible,
+  readUpload,
+  resolvePreset,
+  summarize,
+  type UploadedPreset,
+} from './profiles.js';
+import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail } from './mesh.js';
 import { SliceError, injectThumbnails, runOrca, thumbnailSizes } from './orca.js';
 
 export class SlicingError extends Error {
@@ -218,6 +231,14 @@ export class SlicingService extends EventEmitter<Events> {
     return this.getAssignment(printerId);
   }
 
+  /** Summaries gain fields over time; recompute them from the stored settings. */
+  private refreshSummaries() {
+    for (const p of this.db.select().from(slicerProfiles).where(eq(slicerProfiles.current, true)).all()) {
+      const summary = JSON.stringify(summarize(p.kind, JSON.parse(p.settings)));
+      if (summary !== p.summary) this.db.update(slicerProfiles).set({ summary }).where(eq(slicerProfiles.id, p.id)).run();
+    }
+  }
+
   private currentProfile(kind: ProfileKind, name: string): ProfileRow | undefined {
     return this.db
       .select()
@@ -293,7 +314,7 @@ export class SlicingService extends EventEmitter<Events> {
   deleteModel(id: number) {
     const m = this.getModelRow(id);
     if (!m) throw new SlicingError('Modell nicht gefunden', 404);
-    const used = this.db.select({ n: sql<number>`count(*)` }).from(jobs).where(eq(jobs.modelId, id)).get()?.n ?? 0;
+    const used = this.db.select({ n: sql<number>`count(*)` }).from(jobModels).where(eq(jobModels.modelId, id)).get()?.n ?? 0;
     if (used) throw new SlicingError('Das Modell wird noch von Aufträgen verwendet. Bitte zuerst diese Aufträge löschen.', 409);
     this.db.delete(models).where(eq(models.id, id)).run();
     fs.rmSync(m.storedPath, { force: true });
@@ -324,8 +345,11 @@ export class SlicingService extends EventEmitter<Events> {
 
   createJob(input: CreateJobInput, userId: number): JobInfo {
     const b = createJobSchema.parse(input);
-    const model = this.getModelRow(b.modelId);
-    if (!model) throw new SlicingError('Modell nicht gefunden', 404);
+    const items = b.items.map((it) => {
+      const model = this.getModelRow(it.modelId);
+      if (!model) throw new SlicingError(`Modell #${it.modelId} nicht gefunden`, 404);
+      return { model, copies: it.copies };
+    });
     const printer = this.db.select().from(printers).where(eq(printers.id, b.printerId)).get();
     if (!printer) throw new SlicingError('Drucker nicht gefunden', 404);
 
@@ -342,25 +366,32 @@ export class SlicingService extends EventEmitter<Events> {
     if (!permitted('filament', fil)) throw new SlicingError(`Filamentprofil „${fil.name}“ ist für diesen Drucker nicht freigegeben`);
 
     const now = Date.now();
-    const row = this.db
-      .insert(jobs)
-      .values({
-        modelId: model.id,
-        printerId: printer.id,
-        machineProfileId: machine.id,
-        processProfileId: proc.id,
-        filamentProfileId: fil.id,
-        copies: b.copies,
-        autoOrient: b.autoOrient,
-        autoPrint: b.autoPrint,
-        status: 'queued',
-        note: b.note || null,
-        createdBy: userId,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning()
-      .get();
+    const row = this.db.transaction((tx) => {
+      const job = tx
+        .insert(jobs)
+        .values({
+          modelId: items[0]!.model.id,
+          printerId: printer.id,
+          machineProfileId: machine.id,
+          processProfileId: proc.id,
+          filamentProfileId: fil.id,
+          copies: items.reduce((n, i) => n + i.copies, 0),
+          autoOrient: b.autoOrient,
+          autoPrint: b.autoPrint,
+          overrides: JSON.stringify(b.overrides),
+          status: 'queued',
+          note: b.note || null,
+          createdBy: userId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning()
+        .get();
+      tx.insert(jobModels)
+        .values(items.map((i, position) => ({ jobId: job.id, modelId: i.model.id, copies: i.copies, position })))
+        .run();
+      return job;
+    });
     const info = this.publish(row.id)!;
     this.wake?.();
     return info;
@@ -434,6 +465,7 @@ export class SlicingService extends EventEmitter<Events> {
   // ---------------------------------------------------------------------------
 
   start() {
+    this.refreshSummaries();
     // Leftovers of slices interrupted by a crash or restart.
     for (const d of fs.readdirSync(this.dirs.work)) fs.rmSync(path.join(this.dirs.work, d), { recursive: true, force: true });
     // Interrupted by a restart: slice again / fall back to the sliced state.
@@ -473,11 +505,11 @@ export class SlicingService extends EventEmitter<Events> {
     const workDir = path.join(this.dirs.work, String(job.id));
     try {
       if (!isExecutable(this.cfg.orcaBin)) throw new SliceError(`OrcaSlicer ist nicht verfügbar (${this.cfg.orcaBin})`);
-      const model = this.getModelRow(job.modelId);
+      const items = this.jobItems(job.id);
       const [machine, proc, fil] = [job.machineProfileId, job.processProfileId, job.filamentProfileId].map((pid) =>
         this.db.select().from(slicerProfiles).where(eq(slicerProfiles.id, pid)).get(),
       );
-      if (!model || !machine || !proc || !fil) throw new SliceError('Modell oder Profil wurde gelöscht');
+      if (!items.length || !machine || !proc || !fil) throw new SliceError('Modell oder Profil wurde gelöscht');
 
       this.update(job.id, { status: 'slicing', error: null });
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -485,26 +517,39 @@ export class SlicingService extends EventEmitter<Events> {
       const machineSettings = JSON.parse(machine.settings);
       const cli = cliProfiles(
         { name: machine.name, settings: machineSettings, systemPrinter: machine.systemPrinter ?? machine.name },
-        JSON.parse(proc.settings),
+        applyOverrides(JSON.parse(proc.settings), JSON.parse(job.overrides) as SliceOverrides),
         JSON.parse(fil.settings),
       );
       const started = Date.now();
       const out = await runOrca(
         this.cfg.orcaBin,
-        { workDir, modelPath: model.storedPath, copies: job.copies, autoOrient: job.autoOrient, ...cli },
+        {
+          workDir,
+          models: items.map((i) => ({ path: i.model.storedPath, copies: i.copies })),
+          autoOrient: job.autoOrient,
+          ...cli,
+        },
         this.cfg.sliceTimeoutMs,
         abort.signal,
       );
 
-      // Orca embeds no previews for plain meshes, so render our own.
-      const mesh = parseModel(model.format, await fs.promises.readFile(model.storedPath));
+      // Orca embeds no previews for plain meshes, so render our own (models side by side).
+      const meshes = await Promise.all(
+        items.map(async (i) => ({ mesh: parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath)), copies: i.copies })),
+      );
+      const mesh = layoutForPreview(meshes);
       await injectThumbnails(
         out.gcodePath,
         thumbnailSizes(machineSettings).map((size) => ({ size, png: renderThumbnail(mesh, size) })),
       );
 
       const material = String((JSON.parse(fil.settings).filament_type as string[] | undefined)?.[0] ?? 'Filament');
-      const gcodeName = gcodeFileName(model.name, job.copies, material, out.stats.estimatedTime);
+      const gcodeName = gcodeFileName(
+        items.map((i) => i.model.name),
+        job.copies,
+        material,
+        out.stats.estimatedTime,
+      );
       const gcodePath = path.join(this.dirs.gcode, `job-${job.id}.gcode`);
       await fs.promises.rename(out.gcodePath, gcodePath);
       this.log.info({ job: job.id, ms: Date.now() - started }, 'sliced');
@@ -552,8 +597,18 @@ export class SlicingService extends EventEmitter<Events> {
     return info;
   }
 
+  /** Models of a job in plate order. */
+  private jobItems(jobId: number) {
+    return this.db
+      .select({ model: models, copies: jobModels.copies })
+      .from(jobModels)
+      .innerJoin(models, eq(models.id, jobModels.modelId))
+      .where(eq(jobModels.jobId, jobId))
+      .orderBy(jobModels.position)
+      .all();
+  }
+
   private toJobInfo(j: JobRow): JobInfo {
-    const m = this.getModelRow(j.modelId);
     const p = j.printerId ? this.db.select({ id: printers.id, name: printers.name }).from(printers).where(eq(printers.id, j.printerId)).get() : undefined;
     const profs = this.db
       .select({ id: slicerProfiles.id, kind: slicerProfiles.kind, name: slicerProfiles.name, version: slicerProfiles.version })
@@ -564,15 +619,20 @@ export class SlicingService extends EventEmitter<Events> {
       const r = profs.find((x) => x.id === id);
       return { id, name: r?.name ?? '?', version: r?.version ?? 0 };
     };
+    const list: JobModel[] = this.jobItems(j.id).map(({ model: m, copies }) => ({
+      id: m.id,
+      name: m.name,
+      thumbnailUrl: `/api/models/${m.id}/thumbnail`,
+      dimensions: [m.sizeX, m.sizeY, m.sizeZ],
+      copies,
+    }));
+    const fallback: JobModel = { id: j.modelId, name: 'gelöschtes Modell', thumbnailUrl: `/api/models/${j.modelId}/thumbnail`, dimensions: [0, 0, 0], copies: j.copies };
     return {
       id: j.id,
       status: j.status,
-      model: {
-        id: j.modelId,
-        name: m?.name ?? 'gelöschtes Modell',
-        thumbnailUrl: `/api/models/${j.modelId}/thumbnail`,
-        dimensions: m ? [m.sizeX, m.sizeY, m.sizeZ] : [0, 0, 0],
-      },
+      model: list[0] ?? fallback,
+      models: list.length ? list : [fallback],
+      overrides: JSON.parse(j.overrides) as SliceOverrides,
       printer: p ?? null,
       profiles: { machine: prof(j.machineProfileId), process: prof(j.processProfileId), filament: prof(j.filamentProfileId) },
       copies: j.copies,
@@ -617,8 +677,8 @@ function isExecutable(file: string): boolean {
   }
 }
 
-/** e.g. "Halter_x3_PLA_1h2m.gcode" (like Orca's default naming). */
-export function gcodeFileName(model: string, copies: number, material: string, seconds?: number): string {
+/** e.g. "Halter_x3_PLA_1h2m.gcode" or "Halter_+2_PLA_1h2m.gcode" for several models (like Orca's naming). */
+export function gcodeFileName(names: string[], copies: number, material: string, seconds?: number): string {
   const UMLAUTS: Record<string, string> = { ä: 'ae', ö: 'oe', ü: 'ue', Ä: 'Ae', Ö: 'Oe', Ü: 'Ue', ß: 'ss' };
   const safe = (s: string) =>
     s
@@ -629,7 +689,9 @@ export function gcodeFileName(model: string, copies: number, material: string, s
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '');
   const dur = seconds === undefined ? '' : `_${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}h` : ''}${Math.round((seconds % 3600) / 60)}m`;
-  return `${safe(model).slice(0, 80) || 'modell'}${copies > 1 ? `_x${copies}` : ''}_${safe(material)}${dur}.gcode`;
+  const base = safe(names[0] ?? '').slice(0, 80) || 'modell';
+  const suffix = names.length > 1 ? `_+${names.length - 1}` : copies > 1 ? `_x${copies}` : '';
+  return `${base}${suffix}_${safe(material)}${dur}.gcode`;
 }
 
 export { KINDS };
