@@ -56,6 +56,8 @@ export const printers = sqliteTable('printers', {
   /** Encrypted Moonraker API key. */
   apiKey: text('api_key'),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  /** Confirmed empty by a user; cleared whenever a print starts. Gates the queue. */
+  bedClear: integer('bed_clear', { mode: 'boolean' }).notNull().default(false),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 });
@@ -129,7 +131,20 @@ export const jobs = sqliteTable('jobs', {
   autoOrient: integer('auto_orient', { mode: 'boolean' }).notNull().default(false),
   autoPrint: integer('auto_print', { mode: 'boolean' }).notNull().default(false),
   status: text('status', {
-    enum: ['queued', 'slicing', 'sliced', 'uploading', 'uploaded', 'printing', 'failed', 'cancelled'],
+    enum: [
+      'queued',
+      'slicing',
+      'sliced',
+      'uploading',
+      'uploaded',
+      'waiting',
+      'printing',
+      'done',
+      'print_failed',
+      'print_cancelled',
+      'failed',
+      'cancelled',
+    ],
   }).notNull(),
   error: text('error'),
   log: text('log'),
@@ -142,6 +157,9 @@ export const jobs = sqliteTable('jobs', {
   note: text('note'),
   /** JSON: SliceOverrides */
   overrides: text('overrides').notNull().default('{}'),
+  /** Position in the printer's queue while status = waiting. */
+  queuePosition: integer('queue_position'),
+  finishedAt: integer('finished_at'),
   createdBy: integer('created_by'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
@@ -161,3 +179,24 @@ export const jobModels = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.jobId, t.modelId] })],
 );
+
+export const appSettings = sqliteTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+});
+
+export const pushSubscriptions = sqliteTable('push_subscriptions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  endpoint: text('endpoint').notNull(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  userAgent: text('user_agent'),
+  /** JSON: NotificationEvent[] */
+  events: text('events').notNull(),
+  failures: integer('failures').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+  lastSuccessAt: integer('last_success_at'),
+});

@@ -35,7 +35,10 @@ export interface RawWebcam {
 }
 
 interface MoonrakerEvents {
+  /** Throttled, for display. */
   status: [PrinterStatus];
+  /** Unthrottled: emitted on every change of connection, Klipper state or print state. */
+  lifecycle: [PrinterStatus];
   webcams: [RawWebcam[]];
   capabilities: [PrinterCapabilities];
   /** A line Klipper wrote to the G-code console. */
@@ -73,6 +76,7 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
   private emitTimer?: NodeJS.Timeout;
   private alive = false;
   private updatedAt?: number;
+  private lifecycleKey = '';
   webcams: RawWebcam[] = [];
   capabilities?: PrinterCapabilities;
 
@@ -348,6 +352,7 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
   }
 
   private scheduleEmit(immediate = false) {
+    this.emitLifecycle();
     if (immediate) {
       clearTimeout(this.emitTimer);
       this.emitTimer = undefined;
@@ -359,6 +364,15 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
       this.emitTimer = undefined;
       this.emit('status', this.status);
     }, 250);
+  }
+
+  /** Print-state transitions must never be coalesced by the display throttle. */
+  private emitLifecycle() {
+    const s = this.status;
+    const key = `${s.connection}|${s.klippyState ?? ''}|${s.printState ?? ''}|${s.filename ?? ''}`;
+    if (key === this.lifecycleKey) return;
+    this.lifecycleKey = key;
+    this.emit('lifecycle', s);
   }
 
   private failPending(err: Error) {

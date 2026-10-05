@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardList, Download, FileText, Play, Plus, RotateCw, Send, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ClipboardList, Download, FileText, ListPlus, ListX, Play, Plus, RotateCw, Send, Trash2 } from 'lucide-react';
 import type { JobInfo, SlicerStatus } from '@printhub/shared';
 import { api } from '../lib/api';
 import { useIsAdmin } from '../lib/auth';
 import { confirm, useAction } from '../lib/feedback';
 import { formatDuration, formatFilament, isActivePrint } from '../lib/format';
-import { JOB_STATUS, formatDims, useJobs } from '../lib/jobs';
+import { JOB_STATUS, PRINTABLE, formatDims, jobTitle, queueOf, useJobs } from '../lib/jobs';
 import { useLive } from '../lib/live';
 import { Alert, Badge, Button, Card, Spinner } from '../components/ui';
 import { describeOverrides } from '../components/slicing/SliceOptions';
@@ -57,33 +57,74 @@ export function JobsPage() {
           )}
         </Card>
       ) : (
-        <Card className="divide-y divide-border overflow-hidden">
-          {jobs.map((j) => (
-            <JobRow key={j.id} job={j} editable={isAdmin} />
-          ))}
-        </Card>
+        <>
+          <Queues jobs={jobs} editable={isAdmin} />
+          {jobs.some((j) => j.status !== 'waiting') && (
+            <section className="space-y-2">
+              <h2 className="text-sm font-medium text-text-2">Alle Aufträge</h2>
+              <Card className="divide-y divide-border overflow-hidden">
+                {jobs
+                  .filter((j) => j.status !== 'waiting')
+                  .map((j) => (
+                    <JobRow key={j.id} job={j} editable={isAdmin} />
+                  ))}
+              </Card>
+            </section>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function JobRow({ job, editable }: { job: JobInfo; editable: boolean }) {
+/** One block per printer with its waiting jobs in order. */
+function Queues({ jobs, editable }: { jobs: JobInfo[]; editable: boolean }) {
+  const printers = useLive((s) => s.printers);
+  const withQueue = printers.map((p) => ({ printer: p, queue: queueOf(jobs, p.id) })).filter((x) => x.queue.length);
+  if (!withQueue.length) return null;
+  return (
+    <>
+      {withQueue.map(({ printer, queue }) => (
+        <section key={printer.id} className="space-y-2">
+          <h2 className="flex flex-wrap items-baseline gap-x-2 text-sm font-medium text-text-2">
+            <span>Warteschlange {printer.name}</span>
+            <span className="text-xs font-normal text-text-3">
+              {isActivePrint(printer.status)
+                ? 'startet nach dem aktuellen Druck, sobald das Bett freigegeben ist'
+                : printer.bedClear
+                  ? 'startet automatisch'
+                  : 'wartet auf „Bett frei“ (Druckerseite oder Dashboard)'}
+            </span>
+          </h2>
+          <Card className="divide-y divide-border overflow-hidden">
+            {queue.map((j, i) => (
+              <JobRow key={j.id} job={j} editable={editable} first={i === 0} last={i === queue.length - 1} />
+            ))}
+          </Card>
+        </section>
+      ))}
+    </>
+  );
+}
+
+function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolean; first?: boolean; last?: boolean }) {
   const { busy, run } = useAction();
   const [log, setLog] = useState<string | null>(null);
   const printer = useLive((s) => s.printers.find((p) => p.id === job.printer?.id));
   const st = JOB_STATUS[job.status];
   const working = job.status === 'queued' || job.status === 'slicing' || job.status === 'uploading';
-  const ready = job.status === 'sliced' || job.status === 'uploaded' || job.status === 'printing';
+  const ready = PRINTABLE.includes(job.status) || job.status === 'printing' || job.status === 'waiting';
+  const printable = PRINTABLE.includes(job.status);
   const printerBusy = !printer || printer.status.connection !== 'connected' || isActivePrint(printer.status);
 
   const send = async (print: boolean) => {
     if (
       print &&
       !(await confirm({
-        title: 'Druck starten?',
+        title: job.status === 'done' ? 'Erneut drucken?' : 'Druck starten?',
         body: (
           <>
-            „{job.models.map((m) => m.name).join(', ')}“ wird an <b>{job.printer?.name}</b> gesendet und sofort gedruckt. Ist das Druckbett frei und sauber?
+            „{jobTitle(job)}“ wird an <b>{job.printer?.name}</b> gesendet und sofort gedruckt. Ist das Druckbett frei und sauber?
           </>
         ),
         confirmLabel: 'Drucken',
@@ -157,10 +198,33 @@ function JobRow({ job, editable }: { job: JobInfo; editable: boolean }) {
       {job.error && <Alert tone={job.status === 'failed' ? 'critical' : 'warning'}>{job.error}</Alert>}
 
       <div className="flex flex-wrap gap-2">
-        {editable && ready && (
+        {editable && job.status === 'waiting' && (
+          <>
+            <span className="tabular flex size-10 items-center justify-center rounded-lg bg-surface-2 text-sm font-semibold" title="Position in der Warteschlange">
+              {job.queuePosition}
+            </span>
+            <Button variant="secondary" className="px-3" disabled={first} onClick={() => run('up', () => api(`/jobs/${job.id}/move`, { body: { direction: 'up' } }))} aria-label="Nach vorne">
+              <ArrowUp className="size-4" />
+            </Button>
+            <Button variant="secondary" className="px-3" disabled={last} onClick={() => run('down', () => api(`/jobs/${job.id}/move`, { body: { direction: 'down' } }))} aria-label="Nach hinten">
+              <ArrowDown className="size-4" />
+            </Button>
+            <Button variant="ghost" onClick={() => run('dequeue', () => api(`/jobs/${job.id}/dequeue`, { body: {} }))} loading={busy === 'dequeue'}>
+              <ListX className="size-4" /> Herausnehmen
+            </Button>
+          </>
+        )}
+        {editable && printable && (
           <>
             <Button onClick={() => send(true)} loading={busy === 'print'} disabled={printerBusy} title={printerBusy ? 'Drucker nicht bereit oder beschäftigt' : undefined}>
-              <Play className="size-4" /> Drucken
+              <Play className="size-4" /> {job.status === 'sliced' || job.status === 'uploaded' ? 'Drucken' : 'Nochmal drucken'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => run('enqueue', () => api(`/jobs/${job.id}/enqueue`, { body: {} }), 'In die Warteschlange gestellt')}
+              loading={busy === 'enqueue'}
+            >
+              <ListPlus className="size-4" /> Einreihen
             </Button>
             {job.status === 'sliced' && (
               <Button variant="secondary" onClick={() => send(false)} loading={busy === 'send'} disabled={!printer || printer.status.connection !== 'connected'}>
@@ -181,12 +245,12 @@ function JobRow({ job, editable }: { job: JobInfo; editable: boolean }) {
             </Button>
           </a>
         )}
-        {(job.status === 'failed' || ready) && (
+        {(job.status === 'failed' || ready || job.status === 'print_failed') && (
           <Button variant="ghost" onClick={showLog}>
             <FileText className="size-4" /> {log === null ? 'Log' : 'Log ausblenden'}
           </Button>
         )}
-        {editable && job.status !== 'uploading' && (
+        {editable && job.status !== 'uploading' && job.status !== 'printing' && (
           <Button variant="ghost" onClick={remove} loading={busy === 'delete'} className="ml-auto" aria-label="Auftrag löschen">
             <Trash2 className="size-4" />
           </Button>

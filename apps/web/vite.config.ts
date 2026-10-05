@@ -29,10 +29,11 @@ export default defineConfig({
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
-      workbox: {
-        // App shell only; API, webcam streams and websocket always go to the network.
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
+      // Own service worker (src/sw.ts) for push notifications; Workbox injects the precache list.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
       },
     }),

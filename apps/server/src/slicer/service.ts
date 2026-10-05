@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type {
   CreateJobInput,
@@ -20,6 +20,7 @@ import { createJobSchema } from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { jobModels, jobs, models, printerProfiles, printers, slicerProfiles } from '../db/schema.js';
 import type { PrinterManager } from '../printers/manager.js';
+import type { PrintEvent } from '../printers/events.js';
 import { uploadToPrinter } from '../printers/upload.js';
 import {
   ProfileError,
@@ -52,7 +53,12 @@ type JobRow = typeof jobs.$inferSelect;
 interface Events {
   job: [JobInfo];
   job_removed: [number];
+  /** A queued job could not be started automatically. */
+  queue_error: [JobInfo, string];
 }
+
+/** Jobs whose G-code exists and may be (re)sent to the printer. */
+const SENDABLE = ['sliced', 'uploaded', 'waiting', 'printing', 'done', 'print_failed', 'print_cancelled'] as const;
 
 export interface SlicingConfig {
   dataDir: string;
@@ -71,6 +77,7 @@ export class SlicingService extends EventEmitter<Events> {
   private wake?: () => void;
   private stopped = false;
   private loopDone?: Promise<void>;
+  private starting = new Set<number>();
   private readonly dirs: Record<'models' | 'thumbs' | 'gcode' | 'work', string>;
 
   constructor(
@@ -80,6 +87,7 @@ export class SlicingService extends EventEmitter<Events> {
     private readonly cfg: SlicingConfig,
   ) {
     super();
+    manager.on('print', (e) => void this.onPrintEvent(e));
     this.dirs = {
       models: path.join(cfg.dataDir, 'models'),
       thumbs: path.join(cfg.dataDir, 'thumbs'),
@@ -424,6 +432,7 @@ export class SlicingService extends EventEmitter<Events> {
     this.db.delete(jobs).where(eq(jobs.id, id)).run();
     if (j.gcodePath) fs.rmSync(j.gcodePath, { force: true });
     this.emit('job_removed', id);
+    if (j.status === 'waiting' && j.printerId) this.renumberQueue(j.printerId);
   }
 
   retryJob(id: number): JobInfo {
@@ -439,7 +448,7 @@ export class SlicingService extends EventEmitter<Events> {
   async sendJob(id: number, print: boolean): Promise<JobInfo> {
     const j = this.jobRow(id);
     if (!j) throw new SlicingError('Auftrag nicht gefunden', 404);
-    if (!['sliced', 'uploaded', 'printing'].includes(j.status) || !j.gcodePath || !j.gcodeName) {
+    if (!(SENDABLE as readonly string[]).includes(j.status) || !j.gcodePath || !j.gcodeName) {
       throw new SlicingError('Der Auftrag ist noch nicht fertig gesliced', 409);
     }
     if (!fs.existsSync(j.gcodePath)) throw new SlicingError('G-Code-Datei fehlt, bitte neu slicen', 409);
@@ -452,12 +461,154 @@ export class SlicingService extends EventEmitter<Events> {
     this.update(id, { status: 'uploading', error: null });
     try {
       const printerPath = await uploadToPrinter(client, j.gcodePath, j.gcodeName, { print });
-      this.update(id, { status: print ? 'printing' : 'uploaded', printerPath });
+      this.update(id, {
+        status: print ? 'printing' : 'uploaded',
+        printerPath,
+        finishedAt: null,
+        ...(print || before === 'waiting' ? { queuePosition: null } : {}),
+      });
+      if (j.printerId && before === 'waiting') this.renumberQueue(j.printerId);
     } catch (err) {
       this.update(id, { status: before, error: (err as Error).message });
       throw new SlicingError((err as Error).message, 502);
     }
     return this.getJob(id)!;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Print queue
+  // ---------------------------------------------------------------------------
+
+  /** Appends a sliced job to its printer's queue and starts it if the printer is ready. */
+  enqueue(id: number): JobInfo {
+    const j = this.jobRow(id);
+    if (!j) throw new SlicingError('Auftrag nicht gefunden', 404);
+    if (!j.printerId) throw new SlicingError('Der Drucker des Auftrags existiert nicht mehr', 409);
+    if (j.status === 'waiting') return this.getJob(id)!;
+    if (!(SENDABLE as readonly string[]).includes(j.status) || j.status === 'printing' || !j.gcodePath) {
+      throw new SlicingError('Nur fertig geslicte Aufträge können eingereiht werden', 409);
+    }
+    const max =
+      this.db
+        .select({ m: sql<number>`max(${jobs.queuePosition})` })
+        .from(jobs)
+        .where(and(eq(jobs.printerId, j.printerId), eq(jobs.status, 'waiting')))
+        .get()?.m ?? 0;
+    this.update(id, { status: 'waiting', queuePosition: max + 1, error: null });
+    void this.tryStart(j.printerId);
+    return this.getJob(id)!;
+  }
+
+  dequeue(id: number): JobInfo {
+    const j = this.jobRow(id);
+    if (!j || j.status !== 'waiting') throw new SlicingError('Auftrag ist nicht in der Warteschlange', 409);
+    this.update(id, { status: 'sliced', queuePosition: null });
+    if (j.printerId) this.renumberQueue(j.printerId);
+    return this.getJob(id)!;
+  }
+
+  moveInQueue(id: number, direction: 'up' | 'down'): JobInfo[] {
+    const j = this.jobRow(id);
+    if (!j || j.status !== 'waiting' || !j.printerId) throw new SlicingError('Auftrag ist nicht in der Warteschlange', 409);
+    const queue = this.queueOf(j.printerId);
+    const idx = queue.findIndex((q) => q.id === id);
+    const swap = queue[direction === 'up' ? idx - 1 : idx + 1];
+    if (!swap) return queue.map((q) => this.toJobInfo(q));
+    this.db.transaction((tx) => {
+      tx.update(jobs).set({ queuePosition: swap.queuePosition }).where(eq(jobs.id, id)).run();
+      tx.update(jobs).set({ queuePosition: j.queuePosition }).where(eq(jobs.id, swap.id)).run();
+    });
+    this.publish(id);
+    this.publish(swap.id);
+    return this.queueOf(j.printerId).map((q) => this.toJobInfo(q));
+  }
+
+  /** The user confirmed the bed is empty; optionally start the next queued job. */
+  async confirmBedClear(printerId: number, start: boolean): Promise<JobInfo | undefined> {
+    this.manager.setBedClear(printerId, true);
+    return start ? this.tryStart(printerId) : undefined;
+  }
+
+  private queueOf(printerId: number): JobRow[] {
+    return this.db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.printerId, printerId), eq(jobs.status, 'waiting')))
+      .orderBy(asc(jobs.queuePosition), asc(jobs.createdAt))
+      .all();
+  }
+
+  private renumberQueue(printerId: number) {
+    this.queueOf(printerId).forEach((q, i) => {
+      if (q.queuePosition !== i + 1) {
+        this.db.update(jobs).set({ queuePosition: i + 1 }).where(eq(jobs.id, q.id)).run();
+        this.publish(q.id);
+      }
+    });
+  }
+
+  /** Starts the next queued job when the printer is idle and its bed was confirmed empty. */
+  async tryStart(printerId: number): Promise<JobInfo | undefined> {
+    if (this.starting.has(printerId)) return undefined;
+    const client = this.manager.client(printerId);
+    const st = client?.status;
+    if (!st || st.connection !== 'connected' || st.printState === 'printing' || st.printState === 'paused') return undefined;
+    if (!this.manager.isBedClear(printerId)) return undefined;
+    const next = this.queueOf(printerId)[0];
+    if (!next) return undefined;
+
+    this.starting.add(printerId);
+    try {
+      // Occupied from now on, even before Klipper reports "printing".
+      this.manager.setBedClear(printerId, false);
+      return await this.sendJob(next.id, true);
+    } catch (err) {
+      // Take it out of the queue so a broken job can't block (or loop) the printer.
+      this.update(next.id, { status: 'sliced', queuePosition: null, error: `Start aus der Warteschlange fehlgeschlagen: ${(err as Error).message}` });
+      this.renumberQueue(printerId);
+      this.manager.setBedClear(printerId, true);
+      this.emit('queue_error', this.getJob(next.id)!, (err as Error).message);
+      return undefined;
+    } finally {
+      this.starting.delete(printerId);
+    }
+  }
+
+  /** Follows prints PrintHub started to their end, and keeps the queue moving. */
+  private async onPrintEvent(e: PrintEvent) {
+    const printing = () =>
+      this.db
+        .select()
+        .from(jobs)
+        .where(and(eq(jobs.printerId, e.printerId), eq(jobs.status, 'printing'), isNotNull(jobs.printerPath)))
+        .all();
+
+    if (e.type === 'started') {
+      // A different file started: earlier "printing" jobs ended without us noticing (e.g. PrintHub was down).
+      for (const j of printing()) {
+        if (j.printerPath !== e.filename) this.update(j.id, { status: 'done', finishedAt: Date.now(), error: 'Ende des Drucks nicht erfasst' });
+      }
+    } else if (e.type === 'finished' || (e.type === 'klippy_error' && e.wasPrinting)) {
+      const status = e.type === 'klippy_error' || e.result === 'error' ? 'print_failed' : e.result === 'cancelled' ? 'print_cancelled' : 'done';
+      const message = e.type === 'klippy_error' ? e.message : e.message;
+      for (const j of printing()) {
+        if (j.printerPath === e.filename) {
+          this.update(j.id, { status, finishedAt: Date.now(), error: status === 'done' ? null : message || null });
+        }
+      }
+    } else if (e.type === 'idle') {
+      await this.tryStart(e.printerId);
+    }
+  }
+
+  waitingCount(printerId: number): number {
+    return (
+      this.db
+        .select({ n: sql<number>`count(*)` })
+        .from(jobs)
+        .where(and(eq(jobs.printerId, printerId), eq(jobs.status, 'waiting')))
+        .get()?.n ?? 0
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -645,6 +796,8 @@ export class SlicingService extends EventEmitter<Events> {
       filamentMm: j.filamentMm,
       filamentG: j.filamentG,
       note: j.note,
+      queuePosition: j.status === 'waiting' ? j.queuePosition : null,
+      finishedAt: j.finishedAt,
       createdAt: j.createdAt,
       updatedAt: j.updatedAt,
     };

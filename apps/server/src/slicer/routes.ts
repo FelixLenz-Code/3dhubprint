@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { assignmentSchema, createJobSchema, sendJobSchema } from '@printhub/shared';
+import { assignmentSchema, bedClearSchema, createJobSchema, moveJobSchema, sendJobSchema } from '@printhub/shared';
 import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
 import { SlicingError, type SlicingService } from './service.js';
@@ -150,6 +150,27 @@ export async function slicerRoutes(
     });
 
     admin.post('/jobs/:id/retry', async (req) => slicing.retryJob(idParams.parse(req.params).id));
+
+    admin.post('/jobs/:id/enqueue', async (req) => {
+      const job = slicing.enqueue(idParams.parse(req.params).id);
+      audit(req, 'job.enqueue', `#${job.id} -> ${job.printer?.name}`);
+      return job;
+    });
+
+    admin.post('/jobs/:id/dequeue', async (req) => slicing.dequeue(idParams.parse(req.params).id));
+
+    admin.post('/jobs/:id/move', async (req) => {
+      const { direction } = moveJobSchema.parse(req.body);
+      return slicing.moveInQueue(idParams.parse(req.params).id, direction);
+    });
+
+    admin.post('/printers/:id/bed-clear', async (req) => {
+      const { id } = idParams.parse(req.params);
+      const { start } = bedClearSchema.parse(req.body ?? {});
+      const started = await slicing.confirmBedClear(id, start);
+      audit(req, 'printer.bed_clear', `#${id}${started ? ` start #${started.id}` : ''}`);
+      return { ok: true, started: started ?? null };
+    });
 
     admin.delete('/jobs/:id', async (req) => {
       const { id } = idParams.parse(req.params);

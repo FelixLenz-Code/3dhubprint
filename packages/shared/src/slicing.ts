@@ -58,7 +58,19 @@ export interface ModelInfo {
   thumbnailUrl: string;
 }
 
-export type JobStatus = 'queued' | 'slicing' | 'sliced' | 'uploading' | 'uploaded' | 'printing' | 'failed' | 'cancelled';
+export type JobStatus =
+  | 'queued' // waiting to be sliced
+  | 'slicing'
+  | 'sliced'
+  | 'uploading'
+  | 'uploaded'
+  | 'waiting' // in the printer's print queue
+  | 'printing'
+  | 'done'
+  | 'print_failed'
+  | 'print_cancelled'
+  | 'failed' // slicing failed
+  | 'cancelled'; // slicing cancelled
 
 /**
  * Per-job changes on top of the process profile. Omitted sections keep the profile's values.
@@ -120,9 +132,18 @@ export interface JobInfo {
   filamentMm: number | null;
   filamentG: number | null;
   note: string | null;
+  /** 1-based position in the printer's print queue (status = waiting). */
+  queuePosition: number | null;
+  finishedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
+
+export const moveJobSchema = z.object({ direction: z.enum(['up', 'down']) });
+export const bedClearSchema = z.object({
+  /** Also start the next queued job right away. */
+  start: z.boolean().default(true),
+});
 
 export const MAX_PLATE_OBJECTS = 100;
 

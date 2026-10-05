@@ -3,6 +3,7 @@ import { Flame, Layers, Clock, Printer as PrinterIcon } from 'lucide-react';
 import type { PrinterSummary } from '@printhub/shared';
 import { Badge, Card, ProgressBar, Stat } from './ui';
 import { Webcam } from './Webcam';
+import { BedBanner } from './printer/BedBanner';
 import { fileLabel, formatClock, formatDuration, formatTemp, isActivePrint, statusBadge } from '../lib/format';
 
 export function PrinterCard({ printer }: { printer: PrinterSummary }) {
@@ -30,6 +31,8 @@ export function PrinterCard({ printer }: { printer: PrinterSummary }) {
             <h2 className="truncate font-semibold">{printer.name}</h2>
             <Badge tone={badge.tone}>{badge.label}</Badge>
           </div>
+
+          <BedBanner printer={printer} compact />
 
           {s.connection === 'klippy_not_ready' && s.klippyMessage && (
             <p className="line-clamp-2 text-xs text-text-3">{s.klippyMessage}</p>

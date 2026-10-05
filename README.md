@@ -10,8 +10,8 @@ Selbst gehostete PWA zur Überwachung und Verwaltung von Klipper/Moonraker-3D-Dr
 | 0 | Spike: Moonraker-Anbindung, OrcaSlicer-CLI mit eigenen Profilen | erledigt |
 | 1 | Gerüst, Login mit 2FA, Drucker verwalten, Live-Dashboard, Webcam, PWA | erledigt |
 | 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Bewegen, Makros, Objekte ausschließen), Konsole, G-Code-Upload, Verlauf | erledigt |
-| 3 | Orca-Profilimport + Zuordnung, Modell-Bibliothek (STL/3MF/OBJ), Slicen mit OrcaSlicer, Aufträge | **erledigt** |
-| 4 | Warteschlange mit „Bett frei“-Bestätigung, Web-Push | offen |
+| 3 | Orca-Profilimport + Zuordnung, Modell-Bibliothek (STL/3MF/OBJ), Slicen mit OrcaSlicer, Aufträge, Schnelldruck | erledigt |
+| 4 | Warteschlange mit „Bett frei“-Bestätigung, Druckende erkennen, Web-Push | **erledigt** |
 | 5 | Thingiverse-Suche | offen |
 | 6 | Spoolman, Statistiken, Kosten | offen |
 
@@ -37,6 +37,22 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
 
 Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in den G-Code ein
 (Größen aus der Einstellung `thumbnails` des Druckerprofils, sonst 32 und 300 px).
+
+## Warteschlange
+
+Geslicte Aufträge lassen sich pro Drucker **einreihen**. PrintHub merkt sich, ob das Druckbett
+frei ist: Sobald ein Druck beginnt (egal ob aus PrintHub, Fluidd oder Mainsail), gilt es als
+belegt. Nach dem Druck erscheint auf Dashboard und Druckerseite **„Druckbett räumen“**; erst nach
+der Bestätigung „Bett frei – starten“ beginnt der nächste Auftrag. Ist das Bett bereits als frei
+bestätigt und der Drucker untätig, startet ein neu eingereihter Auftrag sofort. PrintHub verfolgt
+gestartete Aufträge bis zum Ende (gedruckt, abgebrochen, fehlgeschlagen).
+
+## Benachrichtigungen
+
+*Einstellungen → Benachrichtigungen* aktiviert Web-Push für das jeweilige Gerät: Druck fertig,
+Fehler/Abbruch, pausiert (z. B. Filament leer), Klipper-Fehler oder Drucker offline während
+eines Drucks, Slicen fehlgeschlagen/fertig. Voraussetzung ist HTTPS (die Domain über nginx);
+auf iPhone/iPad muss PrintHub zum Home-Bildschirm hinzugefügt sein (iOS 16.4+).
 
 ## Aufbau
 

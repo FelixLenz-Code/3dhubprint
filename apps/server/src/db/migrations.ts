@@ -137,4 +137,29 @@ export const migrations: string[] = [
   INSERT INTO job_models (job_id, model_id, copies, position) SELECT id, model_id, copies, 0 FROM jobs;
   ALTER TABLE jobs ADD COLUMN overrides TEXT NOT NULL DEFAULT '{}';
   `,
+  `
+  -- Print queue: bed state per printer, queue order per job.
+  ALTER TABLE printers ADD COLUMN bed_clear INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE jobs ADD COLUMN queue_position INTEGER;
+  ALTER TABLE jobs ADD COLUMN finished_at INTEGER;
+
+  CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint TEXT NOT NULL,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT,
+    events TEXT NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    last_success_at INTEGER
+  );
+  CREATE UNIQUE INDEX push_subscriptions_endpoint_idx ON push_subscriptions (endpoint);
+  `,
 ];

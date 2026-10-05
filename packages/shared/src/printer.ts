@@ -88,6 +88,8 @@ export interface PrinterSummary {
   webcams: Webcam[];
   status: PrinterStatus;
   capabilities?: PrinterCapabilities;
+  /** The bed was confirmed empty after the last print. */
+  bedClear: boolean;
 }
 
 export interface FileMetadata {

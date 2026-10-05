@@ -19,7 +19,8 @@ unter obiger Adresse verfügbar.
 ## npm-Pakete
 
 Die im Docker-Image enthaltenen npm-Pakete stehen unter permissiven Lizenzen (MIT, ISC,
-BSD-2-Clause, BSD-3-Clause, Apache-2.0, BlueOak-1.0.0). Ihre Lizenztexte liegen jeweils im
+BSD-2-Clause, BSD-3-Clause, Apache-2.0, BlueOak-1.0.0) bzw. MPL-2.0 (`web-push`, mit der AGPL
+vereinbar). Ihre Lizenztexte liegen jeweils im
 Paketverzeichnis unter `node_modules`. Übersicht erzeugen:
 
 ```bash

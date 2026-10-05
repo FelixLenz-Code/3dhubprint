@@ -6,6 +6,7 @@ import type { Db } from '../db/index.js';
 import { printers } from '../db/schema.js';
 import type { SecretBox } from '../crypto.js';
 import { MoonrakerClient, type RawWebcam } from './moonraker.js';
+import { PrintEventTracker, type PrintEvent } from './events.js';
 
 type PrinterRow = typeof printers.$inferSelect;
 
@@ -13,6 +14,8 @@ interface ManagerEvents {
   status: [number, PrinterStatus];
   temps: [number, TempSample];
   console: [number, ConsoleLine[]];
+  /** Print lifecycle transitions (started, finished, paused, errors, idle). */
+  print: [PrintEvent];
   changed: [];
 }
 
@@ -26,6 +29,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
   private clients = new Map<number, MoonrakerClient>();
   private rows = new Map<number, PrinterRow>();
   private consoles = new Map<number, ConsoleLine[]>();
+  private tracker = new PrintEventTracker((e) => this.onPrintEvent(e));
   private sampleTimer?: NodeJS.Timeout;
 
   constructor(
@@ -46,6 +50,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
 
   stop() {
     clearInterval(this.sampleTimer);
+    this.tracker.stop();
     for (const c of this.clients.values()) c.stop();
     this.clients.clear();
   }
@@ -121,7 +126,30 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
       webcams: client ? client.webcams.map((w, i) => toWebcam(row.id, i, w)) : [],
       status: client ? client.status : { connection: 'disabled' },
       capabilities: client?.capabilities,
+      bedClear: row.bedClear,
     };
+  }
+
+  name(id: number): string {
+    return this.rows.get(id)?.name ?? `Drucker #${id}`;
+  }
+
+  isBedClear(id: number): boolean {
+    return this.rows.get(id)?.bedClear ?? false;
+  }
+
+  setBedClear(id: number, clear: boolean) {
+    const row = this.rows.get(id);
+    if (!row || row.bedClear === clear) return;
+    this.db.update(printers).set({ bedClear: clear }).where(eq(printers.id, id)).run();
+    this.rows.set(id, { ...row, bedClear: clear });
+    this.emit('changed');
+  }
+
+  private onPrintEvent(e: PrintEvent) {
+    // Any print that starts occupies the bed, whoever started it.
+    if (e.type === 'started') this.setBedClear(e.printerId, false);
+    this.emit('print', e);
   }
 
   consoleHistory(id: number): ConsoleLine[] {
@@ -151,6 +179,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
     }
     const client = new MoonrakerClient(row.url, apiKey, this.log.child({ printer: row.id }));
     client.on('status', (s) => this.emit('status', row.id, s));
+    client.on('lifecycle', (s) => this.tracker.update(row.id, s));
     client.on('webcams', () => this.emit('changed'));
     client.on('capabilities', () => this.emit('changed'));
     client.on('gcode', (text) => {
@@ -164,6 +193,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
     this.clients.get(id)?.stop();
     this.clients.delete(id);
     this.consoles.delete(id);
+    this.tracker.forget(id);
   }
 
   private emitTempSamples() {

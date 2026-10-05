@@ -31,13 +31,13 @@ export class FakeMoonraker {
   private wss = new WebSocketServer({ server: this.server, path: '/websocket' });
   private sockets = new Set<WebSocket>();
 
-  async start(): Promise<string> {
+  async start(port = 0, host = '127.0.0.1'): Promise<string> {
     this.wss.on('connection', (ws) => {
       this.sockets.add(ws);
       ws.on('close', () => this.sockets.delete(ws));
       ws.on('message', (data) => this.onRpc(ws, JSON.parse(data.toString())));
     });
-    await new Promise<void>((r) => this.server.listen(0, '127.0.0.1', r));
+    await new Promise<void>((r) => this.server.listen(port, host, r));
     return `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
   }
 

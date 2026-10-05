@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, Clock, Coins, FileText, Layers, Play, Send, Settings2, Weight, Zap } from 'lucide-react';
+import { ChevronDown, Clock, Coins, FileText, Layers, ListPlus, Play, Send, Settings2, Weight, Zap } from 'lucide-react';
 import type { JobInfo, PrinterProfileAssignment, PrinterSummary, SliceOverrides, SlicerProfileInfo, SlicerStatus } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { toast, useAction } from '../../lib/feedback';
@@ -241,7 +241,7 @@ function Result({
       {offline ? (
         <Alert tone="warning">Der Drucker ist nicht verbunden. Der Auftrag bleibt unter „Aufträge“ gespeichert.</Alert>
       ) : busyPrinter ? (
-        <Alert tone="warning">Auf dem Drucker läuft gerade ein Druck. Du kannst die Datei schon übertragen und später starten.</Alert>
+        <Alert tone="warning">Auf dem Drucker läuft gerade ein Druck. Stell den Auftrag in die Warteschlange; er startet, sobald du das Bett danach freigibst.</Alert>
       ) : (
         <Alert tone="neutral">Vor dem Start: Ist das Druckbett frei und sauber und das richtige Filament ({String(filament?.summary.material ?? '')}) geladen?</Alert>
       )}
@@ -250,12 +250,29 @@ function Result({
         <Button variant="ghost" onClick={onBack} className="mr-auto">
           Einstellungen ändern
         </Button>
-        <Button variant="secondary" onClick={() => send(false)} disabled={offline} loading={busy === 'send'}>
-          <Send className="size-4" /> Nur übertragen
-        </Button>
-        <Button onClick={() => send(true)} disabled={offline || busyPrinter} loading={busy === 'print'}>
-          <Play className="size-4" /> Drucken
-        </Button>
+        {busyPrinter ? (
+          <Button
+            onClick={() =>
+              run('enqueue', async () => {
+                await api(`/jobs/${job.id}/enqueue`, { body: {} });
+                toast('In die Warteschlange gestellt');
+                onDone();
+              })
+            }
+            loading={busy === 'enqueue'}
+          >
+            <ListPlus className="size-4" /> In Warteschlange
+          </Button>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={() => send(false)} disabled={offline} loading={busy === 'send'}>
+              <Send className="size-4" /> Nur übertragen
+            </Button>
+            <Button onClick={() => send(true)} disabled={offline} loading={busy === 'print'}>
+              <Play className="size-4" /> Drucken
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

@@ -23,6 +23,8 @@ import { MoonrakerError } from './printers/moonraker.js';
 import { wsHub } from './ws/hub.js';
 import { SlicingError, SlicingService } from './slicer/service.js';
 import { slicerRoutes } from './slicer/routes.js';
+import { NotificationService } from './notifications/service.js';
+import { pushRoutes } from './notifications/routes.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -47,6 +49,10 @@ export async function buildApp() {
     orcaVersion: config.ORCA_VERSION,
     sliceTimeoutMs: config.SLICE_TIMEOUT_MIN * 60 * 1000,
   });
+  // VAPID wants an https: or mailto: contact.
+  const pushSubject = config.PUBLIC_URL?.startsWith('https://') ? config.PUBLIC_URL : 'mailto:printhub@localhost';
+  const push = new NotificationService(db, box, app.log.child({ module: 'push' }), pushSubject);
+  push.attach(manager, slicing);
 
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -106,6 +112,7 @@ export async function buildApp() {
     tmpDir: path.join(config.dataDir, 'tmp'),
     maxModelBytes: config.MAX_MODEL_MB * 1024 * 1024,
   });
+  await app.register(pushRoutes, { prefix: '/api/push', push });
   await app.register(wsHub, { prefix: '/api', manager, auth, slicing });
 
   const webDist = config.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');

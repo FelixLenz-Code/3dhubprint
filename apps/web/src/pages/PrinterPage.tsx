@@ -19,6 +19,7 @@ import { FilesTab } from '../components/printer/FilesTab';
 import { HistoryTab } from '../components/printer/HistoryTab';
 import { ConsoleTab } from '../components/printer/ConsoleTab';
 import { QuickPrintButton } from '../components/printer/QuickPrint';
+import { BedBanner } from '../components/printer/BedBanner';
 import { thumbUrl } from '../lib/files';
 import { fileLabel, formatClock, formatDuration, formatFilament, formatTemp, isActivePrint, statusBadge } from '../lib/format';
 
@@ -75,6 +76,8 @@ export function PrinterPage() {
       {printer.status.connection === 'klippy_not_ready' && printer.status.klippyMessage && (
         <Card className="whitespace-pre-wrap border-critical/40 p-4 font-mono text-xs text-text-2">{printer.status.klippyMessage}</Card>
       )}
+
+      <BedBanner printer={printer} />
 
       <nav className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border" role="tablist">
         {TABS.map((t) => (
