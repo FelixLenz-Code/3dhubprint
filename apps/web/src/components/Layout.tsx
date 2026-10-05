@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutGrid, LogOut, Settings, WifiOff } from 'lucide-react';
+import { ClipboardList, LayoutGrid, LogOut, Settings, WifiOff } from 'lucide-react';
 import clsx from 'clsx';
 import type { Me } from '@printhub/shared';
 import { api } from '../lib/api';
@@ -9,6 +9,7 @@ import { useLive } from '../lib/live';
 
 const NAV = [
   { to: '/', label: 'Drucker', icon: LayoutGrid, end: true },
+  { to: '/jobs', label: 'Aufträge', icon: ClipboardList, end: false },
   { to: '/settings', label: 'Einstellungen', icon: Settings, end: false },
 ];
 

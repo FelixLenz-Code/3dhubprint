@@ -89,12 +89,12 @@ export interface DirectoryListing {
   diskTotal?: number;
 }
 
-export type JobStatus = 'completed' | 'cancelled' | 'error' | 'klippy_shutdown' | 'klippy_disconnect' | 'interrupted' | 'in_progress' | 'server_exit';
+export type HistoryJobStatus = 'completed' | 'cancelled' | 'error' | 'klippy_shutdown' | 'klippy_disconnect' | 'interrupted' | 'in_progress' | 'server_exit';
 
 export interface HistoryJob {
   id: string;
   filename: string;
-  status: JobStatus | string;
+  status: HistoryJobStatus | string;
   startTime: number;
   endTime?: number;
   printDuration: number;

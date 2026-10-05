@@ -3,9 +3,11 @@ import clsx from 'clsx';
 import { PrinterSettings } from './settings/PrinterSettings';
 import { SecuritySettings } from './settings/SecuritySettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
+import { SlicerSettings } from './settings/SlicerSettings';
 
 const TABS = [
   { to: 'printers', label: 'Drucker' },
+  { to: 'slicer', label: 'Slicer' },
   { to: 'security', label: 'Sicherheit' },
   { to: 'appearance', label: 'Darstellung' },
 ];
@@ -33,6 +35,7 @@ export function SettingsPage() {
       <Routes>
         <Route index element={<Navigate to="printers" replace />} />
         <Route path="printers" element={<PrinterSettings />} />
+        <Route path="slicer" element={<SlicerSettings />} />
         <Route path="security" element={<SecuritySettings />} />
         <Route path="appearance" element={<AppearanceSettings />} />
       </Routes>

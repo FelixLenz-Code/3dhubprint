@@ -21,6 +21,8 @@ import { fileRoutes } from './printers/fileRoutes.js';
 import { ControlError } from './printers/control.js';
 import { MoonrakerError } from './printers/moonraker.js';
 import { wsHub } from './ws/hub.js';
+import { SlicingError, SlicingService } from './slicer/service.js';
+import { slicerRoutes } from './slicer/routes.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -38,6 +40,13 @@ export async function buildApp() {
   const issuer = config.PUBLIC_URL ? `PrintHub (${new URL(config.PUBLIC_URL).hostname})` : 'PrintHub';
   const auth = new AuthService(db, box, config.sessionTtlMs, issuer);
   const manager = new PrinterManager(db, box, app.log);
+  const slicing = new SlicingService(db, manager, app.log.child({ module: 'slicer' }), {
+    dataDir: config.dataDir,
+    orcaBin: config.ORCA_BIN,
+    orcaProfiles: config.ORCA_PROFILES,
+    orcaVersion: config.ORCA_VERSION,
+    sliceTimeoutMs: config.SLICE_TIMEOUT_MIN * 60 * 1000,
+  });
 
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -73,6 +82,7 @@ export async function buildApp() {
       });
     }
     if (err instanceof AuthError) return reply.code(err.status).send({ error: err.code, message: err.message });
+    if (err instanceof SlicingError) return reply.code(err.status).send({ error: 'slicing', message: err.message });
     if (err instanceof ControlError) {
       return reply.code(err.code === 'invalid' ? 400 : 409).send({ error: err.code, message: err.message });
     }
@@ -89,7 +99,14 @@ export async function buildApp() {
   await app.register(printerRoutes, { prefix: '/api/printers', manager });
   await app.register(controlRoutes, { prefix: '/api/printers', manager, auth });
   await app.register(fileRoutes, { prefix: '/api/printers', manager, auth, tmpDir: path.join(config.dataDir, 'tmp') });
-  await app.register(wsHub, { prefix: '/api', manager, auth });
+  await app.register(slicerRoutes, {
+    prefix: '/api',
+    slicing,
+    auth,
+    tmpDir: path.join(config.dataDir, 'tmp'),
+    maxModelBytes: config.MAX_MODEL_MB * 1024 * 1024,
+  });
+  await app.register(wsHub, { prefix: '/api', manager, auth, slicing });
 
   const webDist = config.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');
   if (fs.existsSync(path.join(webDist, 'index.html'))) {
@@ -116,10 +133,14 @@ export async function buildApp() {
   }
 
   const purge = setInterval(() => auth.purgeExpiredSessions(), 60 * 60 * 1000);
-  app.addHook('onReady', async () => manager.start());
+  app.addHook('onReady', async () => {
+    manager.start();
+    slicing.start();
+  });
   app.addHook('onClose', async () => {
     clearInterval(purge);
     manager.stop();
+    await slicing.stop();
     sqlite.close();
   });
 

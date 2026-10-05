@@ -3,13 +3,17 @@ import type { WebSocket } from 'ws';
 import type { ServerMessage } from '@printhub/shared';
 import type { PrinterManager } from '../printers/manager.js';
 import type { AuthService } from '../auth/service.js';
+import type { SlicingService } from '../slicer/service.js';
 import { SESSION_COOKIE } from '../auth/plugin.js';
 
 const REVALIDATE_MS = 60_000;
 const PING_MS = 25_000;
 
 /** Pushes live printer state to authenticated browsers over /api/ws. */
-export async function wsHub(app: FastifyInstance, { manager, auth }: { manager: PrinterManager; auth: AuthService }) {
+export async function wsHub(
+  app: FastifyInstance,
+  { manager, auth, slicing }: { manager: PrinterManager; auth: AuthService; slicing: SlicingService },
+) {
   const clients = new Set<WebSocket>();
 
   const broadcast = (msg: ServerMessage) => {
@@ -20,6 +24,8 @@ export async function wsHub(app: FastifyInstance, { manager, auth }: { manager: 
   manager.on('status', (printerId, status) => broadcast({ type: 'status', printerId, status }));
   manager.on('temps', (printerId, sample) => broadcast({ type: 'temps', printerId, sample }));
   manager.on('console', (printerId, lines) => broadcast({ type: 'console', printerId, lines }));
+  slicing.on('job', (job) => broadcast({ type: 'job', job }));
+  slicing.on('job_removed', (id) => broadcast({ type: 'job_removed', id }));
   manager.on('changed', () => broadcast({ type: 'snapshot', printers: manager.list() }));
 
   app.get('/ws', { websocket: true, preValidation: app.requireAuth }, (socket, req) => {

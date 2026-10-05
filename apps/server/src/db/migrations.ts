@@ -53,4 +53,75 @@ export const migrations: string[] = [
     ip TEXT
   );
   `,
+  `
+  CREATE TABLE slicer_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    current INTEGER NOT NULL DEFAULT 1,
+    parent TEXT,
+    system_printer TEXT,
+    settings TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    source_file TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX slicer_profiles_version_idx ON slicer_profiles (kind, name, version);
+  CREATE INDEX slicer_profiles_current_idx ON slicer_profiles (kind, current);
+
+  -- Assignments reference profile names so a re-imported (newer) version applies automatically.
+  CREATE TABLE printer_profiles (
+    printer_id INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
+    PRIMARY KEY (printer_id, kind, profile_name)
+  );
+
+  CREATE TABLE models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    format TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    triangles INTEGER NOT NULL,
+    size_x REAL NOT NULL,
+    size_y REAL NOT NULL,
+    size_z REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'upload',
+    source_url TEXT,
+    license TEXT,
+    author TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX models_sha_idx ON models (sha256);
+
+  CREATE TABLE jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id INTEGER NOT NULL REFERENCES models(id),
+    printer_id INTEGER REFERENCES printers(id) ON DELETE SET NULL,
+    machine_profile_id INTEGER NOT NULL REFERENCES slicer_profiles(id),
+    process_profile_id INTEGER NOT NULL REFERENCES slicer_profiles(id),
+    filament_profile_id INTEGER NOT NULL REFERENCES slicer_profiles(id),
+    copies INTEGER NOT NULL DEFAULT 1,
+    auto_orient INTEGER NOT NULL DEFAULT 0,
+    auto_print INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    error TEXT,
+    log TEXT,
+    gcode_path TEXT,
+    gcode_name TEXT,
+    printer_path TEXT,
+    estimated_time REAL,
+    filament_mm REAL,
+    filament_g REAL,
+    note TEXT,
+    created_by INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX jobs_status_idx ON jobs (status);
+  `,
 ];

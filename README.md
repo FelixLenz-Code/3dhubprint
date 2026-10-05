@@ -9,11 +9,30 @@ Selbst gehostete PWA zur Überwachung und Verwaltung von Klipper/Moonraker-3D-Dr
 |---|---|---|
 | 0 | Spike: Moonraker-Anbindung, OrcaSlicer-CLI mit eigenen Profilen | erledigt |
 | 1 | Gerüst, Login mit 2FA, Drucker verwalten, Live-Dashboard, Webcam, PWA | erledigt |
-| 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Bewegen, Makros, Objekte ausschließen), Konsole, G-Code-Upload, Verlauf | **erledigt** |
-| 3 | Orca-Profilimport + Zuordnung, STL-Upload, Slicer-Worker, Aufträge | offen |
+| 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Bewegen, Makros, Objekte ausschließen), Konsole, G-Code-Upload, Verlauf | erledigt |
+| 3 | Orca-Profilimport + Zuordnung, Modell-Bibliothek (STL/3MF/OBJ), Slicen mit OrcaSlicer, Aufträge | **erledigt** |
 | 4 | Warteschlange mit „Bett frei“-Bestätigung, Web-Push | offen |
 | 5 | Thingiverse-Suche | offen |
 | 6 | Spoolman, Statistiken, Kosten | offen |
+
+## Slicen
+
+PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
+
+1. **Einstellungen → Slicer → Profile importieren:** In OrcaSlicer *Datei → Exportieren →
+   Preset-Bundle exportieren* (`.orca_printer`/`.orca_filament`) oder die JSON-Dateien aus
+   `OrcaSlicer/user/default/{machine,process,filament}` hochladen. PrintHub löst die Vererbung
+   gegen die Orca-System-Profile auf und entfernt Drucker-Adressen und API-Keys. Geänderte
+   Profile erhalten beim erneuten Import eine neue Version; Aufträge merken sich die genutzte.
+2. **Zuordnung:** Jedem Drucker ein Druckerprofil zuweisen. Prozess- und Filamentprofile sind
+   automatisch auf die passenden beschränkt (`compatible_printers`), lassen sich aber auch
+   ausdrücklich freigeben.
+3. **Aufträge → Neuer Auftrag:** Modell hochladen oder aus der Bibliothek wählen, Drucker,
+   Qualität, Filament, Kopien (automatisch angeordnet) und optional automatisches Ausrichten.
+   Nach dem Slicen: *Drucken*, *Nur übertragen* oder G-Code herunterladen.
+
+Vorschaubilder für Fluidd/Mainsail rendert PrintHub selbst und bettet sie in den G-Code ein
+(Größen aus der Einstellung `thumbnails` des Druckerprofils, sonst 32 und 300 px).
 
 ## Aufbau
 
@@ -22,6 +41,12 @@ apps/server     Fastify (TypeScript), SQLite, Moonraker-WebSocket-Clients, Auth
 apps/web        React + Vite + Tailwind, PWA (vite-plugin-pwa)
 packages/shared Gemeinsame Typen und Zod-Schemas
 fixtures/       OrcaSlicer-Profile (K1, Ender 3 S1 Plus) für Entwicklung/Tests
+
+apps/server/src/slicer/
+  profiles.ts   Orca-Presets: Typ erkennen, Vererbung auflösen, bereinigen, CLI-Dateien bauen
+  mesh.ts       STL/3MF/OBJ einlesen, Maße, Software-Renderer für Vorschaubilder
+  orca.ts       OrcaSlicer-CLI aufrufen, G-Code-Statistik, Vorschaubilder einbetten
+  service.ts    Profile (versioniert), Zuordnung, Modell-Bibliothek, Auftrags-Warteschlange
 ```
 
 Der Server hält pro Drucker eine WebSocket-Verbindung zu Moonraker
@@ -55,7 +80,8 @@ Danach die Adresse öffnen, das Admin-Konto anlegen und **sofort unter Einstellu
 die 2FA aktivieren**.
 
 **Empfohlene VM:** 4 vCPU (CPU-Typ `host`), 6–8 GB RAM, 32 GB System + 100 GB Daten.
-Für die reine Überwachung reichen 1 vCPU und 1 GB; die Reserve ist für das Slicen.
+Das Image ist wegen OrcaSlicer ca. 1,2 GB groß. Im Leerlauf braucht PrintHub nur wenige
+hundert MB RAM; die Reserve ist für das Slicen großer Modelle.
 
 ### Verwaltung und Updates
 
@@ -151,13 +177,17 @@ pnpm test
 pnpm typecheck
 ```
 
-## Erkenntnisse OrcaSlicer-CLI (für Phase 3)
+## Erkenntnisse OrcaSlicer-CLI
 
 Getestet mit OrcaSlicer 2.4.2: Eigene Presets enthalten nur Abweichungen (`inherits`).
 Für die CLI müssen sie gegen die System-Profile aufgelöst werden und `type` erhalten.
 Das aufgelöste Maschinenprofil muss `inherits: <System-Druckername>` behalten, und die
 Prozess-/Filamentprofile müssen diesen Namen in `compatible_printers` führen, sonst bricht
 die CLI mit „printer is not compatible with the process preset“ (-17) ab.
+
+Im Container läuft die CLI ohne Display. Die AppImage wird beim Image-Build per `unsquashfs`
+entpackt (kein FUSE nötig) und per SHA-256 geprüft. Vorschaubilder erzeugt die CLI für
+STL-Eingaben nicht, daher rendert PrintHub sie selbst.
 
 ## Lizenz
 

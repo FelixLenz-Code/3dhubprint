@@ -27,6 +27,12 @@ const envSchema = z.object({
     .default('auto'),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   WEB_DIST: z.string().optional(),
+  /** OrcaSlicer CLI; the Docker image ships it under /opt/orca. */
+  ORCA_BIN: z.string().default('/opt/orca/AppRun'),
+  ORCA_PROFILES: z.string().default('/opt/orca/resources/profiles'),
+  ORCA_VERSION: z.string().default('2.4.2'),
+  SLICE_TIMEOUT_MIN: z.coerce.number().positive().default(30),
+  MAX_MODEL_MB: z.coerce.number().positive().default(300),
   /** Set by the Docker build (git tag or commit). */
   APP_VERSION: z.string().default('dev'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

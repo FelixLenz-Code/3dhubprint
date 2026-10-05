@@ -10,6 +10,7 @@ import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
 import { PrinterControl } from './control.js';
 import type { MoonrakerClient } from './moonraker.js';
+import { UploadError, uploadToPrinter } from './upload.js';
 
 const idParams = z.object({ id: z.coerce.number().int().positive() });
 const GCODE_EXT = /\.(gcode|gco|g|bgcode)$/i;
@@ -151,18 +152,14 @@ export async function fileRoutes(
           }
         }
 
-        const form = new FormData();
-        form.append('file', await fs.openAsBlob(tmp), filename);
-        form.append('root', 'gcodes');
-        if (folder) form.append('path', folder);
-        if (print) form.append('print', 'true');
-        const res = await ctx.client.fetch('/server/files/upload', { method: 'POST', body: form });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          req.log.warn({ status: res.status, text: text.slice(0, 300) }, 'moonraker upload failed');
-          return reply.code(502).send({ error: 'upload_failed', message: `Upload zum Drucker fehlgeschlagen (HTTP ${res.status})` });
+        let target: string;
+        try {
+          target = await uploadToPrinter(ctx.client, tmp, filename, { folder, print });
+        } catch (err) {
+          if (!(err instanceof UploadError)) throw err;
+          req.log.warn({ status: err.status }, 'moonraker upload failed');
+          return reply.code(502).send({ error: 'upload_failed', message: err.message });
         }
-        const target = folder ? `${folder}/${filename}` : filename;
         audit(req, ctx.id, print ? 'upload_print' : 'upload', target);
         return { ok: true, path: target, printStarted: print };
       } finally {

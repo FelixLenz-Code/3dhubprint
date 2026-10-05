@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { ConsoleLine, PrinterSummary, ServerMessage, TempSample } from '@printhub/shared';
+import type { ConsoleLine, JobInfo, PrinterSummary, ServerMessage, TempSample } from '@printhub/shared';
 
 const HISTORY_MS = 20 * 60 * 1000;
 const CONSOLE_LINES = 300;
@@ -12,6 +12,8 @@ interface State {
   printers: PrinterSummary[];
   temps: Record<number, TempSample[]>;
   consoles: Record<number, ConsoleLine[]>;
+  /** null until the initial job list has been loaded. */
+  jobs: JobInfo[] | null;
 }
 
 /**
@@ -19,7 +21,7 @@ interface State {
  * useSyncExternalStore; each update replaces the state object immutably.
  */
 class LiveStore {
-  private state: State = { connection: 'connecting', printers: [], temps: {}, consoles: {} };
+  private state: State = { connection: 'connecting', printers: [], temps: {}, consoles: {}, jobs: null };
   private listeners = new Set<Listener>();
   private ws: WebSocket | null = null;
   private retry = 1000;
@@ -43,7 +45,7 @@ class LiveStore {
     clearTimeout(this.timer);
     this.ws?.close();
     this.ws = null;
-    this.set({ connection: 'closed', printers: [], temps: {}, consoles: {} });
+    this.set({ connection: 'closed', printers: [], temps: {}, consoles: {}, jobs: null });
   }
 
   /** Seeds the history (e.g. from Moonraker's temperature store) without dropping live samples. */
@@ -62,6 +64,17 @@ class LiveStore {
     this.set({ consoles: { ...this.state.consoles, [printerId]: merged } });
   }
 
+  setJobs(jobs: JobInfo[]) {
+    this.set({ jobs });
+  }
+
+  /** Inserts or replaces a job (newest first). */
+  upsertJob(job: JobInfo) {
+    if (!this.state.jobs) return;
+    const rest = this.state.jobs.filter((j) => j.id !== job.id);
+    this.set({ jobs: [job, ...rest].sort((a, b) => b.createdAt - a.createdAt) });
+  }
+
   private connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws`);
@@ -69,7 +82,7 @@ class LiveStore {
     this.set({ connection: 'connecting' });
     ws.onopen = () => {
       this.retry = 1000;
-      this.set({ connection: 'open' });
+      this.set({ connection: 'open', jobs: null });
     };
     ws.onmessage = (ev) => this.onMessage(JSON.parse(ev.data) as ServerMessage);
     ws.onclose = (ev) => {
@@ -105,6 +118,12 @@ class LiveStore {
         this.set({ temps: { ...this.state.temps, [msg.printerId]: next } });
         break;
       }
+      case 'job':
+        this.upsertJob(msg.job);
+        break;
+      case 'job_removed':
+        if (this.state.jobs) this.set({ jobs: this.state.jobs.filter((j) => j.id !== msg.id) });
+        break;
       case 'console': {
         const next = [...(this.state.consoles[msg.printerId] ?? []), ...msg.lines].slice(-CONSOLE_LINES);
         this.set({ consoles: { ...this.state.consoles, [msg.printerId]: next } });
