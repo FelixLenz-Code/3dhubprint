@@ -362,6 +362,30 @@ describe('models and jobs', () => {
     expect(gcode2).toContain('; bounds = -5,-15,0,5,15,5');
   });
 
+  it('keeps wizard drafts out of the job list until saved or sent', async () => {
+    const r = await api('/api/jobs', {
+      body: { items: [{ modelId }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA', draft: true, autoPrint: true },
+    });
+    expect(r.body).toMatchObject({ draft: true, autoPrint: false });
+    const job = await until(async () => {
+      const j = (await api(`/api/jobs/${r.body.id}`)).body as JobInfo;
+      return j.status === 'sliced' ? j : undefined;
+    });
+    expect(job.draft).toBe(true);
+    const listed = () => api('/api/jobs').then((x) => (x.body as JobInfo[]).some((j) => j.id === job.id));
+    expect(await listed()).toBe(false);
+    expect((await api(`/api/jobs/${job.id}/keep`, { body: {} })).body.draft).toBe(false);
+    expect(await listed()).toBe(true);
+
+    // Sending a draft saves it as well.
+    const r2 = await api('/api/jobs', {
+      body: { items: [{ modelId }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA', draft: true },
+    });
+    await until(async () => ((await api(`/api/jobs/${r2.body.id}`)).body.status === 'sliced' ? true : undefined));
+    const sent = await api(`/api/jobs/${r2.body.id}/send`, { body: { print: false } });
+    expect(sent.body).toMatchObject({ status: 'uploaded', draft: false });
+  });
+
   it('protects models that are still used by jobs', async () => {
     expect((await api(`/api/models/${modelId}`, { method: 'DELETE' })).status).toBe(409);
   });

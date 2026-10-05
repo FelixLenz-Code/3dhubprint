@@ -163,6 +163,8 @@ export const jobs = sqliteTable('jobs', {
   bedType: text('bed_type'),
   /** Let Orca arrange the parts; false = use the positions stored per model. */
   arrange: integer('arrange', { mode: 'boolean' }).notNull().default(true),
+  /** Sliced for review in the job wizard; hidden until saved, removed after a day. */
+  draft: integer('draft', { mode: 'boolean' }).notNull().default(false),
   /** Position in the printer's queue while status = waiting. */
   queuePosition: integer('queue_position'),
   finishedAt: integer('finished_at'),

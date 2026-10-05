@@ -204,7 +204,7 @@ export class NotificationService {
     slicing.on('job', (job: JobInfo) => {
       const before = lastStatus.get(job.id);
       lastStatus.set(job.id, job.status);
-      if (before === job.status || before === undefined) return;
+      if (before === job.status || before === undefined || job.draft) return;
       const names = job.models.map((m) => m.name).join(', ');
       if (job.status === 'failed') {
         fire('slice_failed', { title: '❌ Slicen fehlgeschlagen', body: `${names}: ${job.error ?? ''}`, url: '/jobs', tag: `job-${job.id}` });

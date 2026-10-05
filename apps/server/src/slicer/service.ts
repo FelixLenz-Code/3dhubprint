@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type {
   BedType,
@@ -76,6 +76,8 @@ const KINDS: ProfileKind[] = ['machine', 'process', 'filament'];
 const MODEL_THUMB_SIZE = 512;
 /** Enough detail for orienting a part in the browser, small enough for phones. */
 const DISPLAY_TRIANGLES = 150_000;
+/** Unsaved wizard jobs are removed after this. */
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class SlicingService extends EventEmitter<Events> {
   private system?: SystemProfiles;
@@ -422,6 +424,7 @@ export class SlicingService extends EventEmitter<Events> {
     checkBedTemp(JSON.parse(fil.settings), fil.name, bedType);
     if (!b.arrange) checkPlacement(items, machineSettings);
 
+    this.removeStaleDrafts();
     const now = Date.now();
     const row = this.db.transaction((tx) => {
       const job = tx
@@ -434,7 +437,9 @@ export class SlicingService extends EventEmitter<Events> {
           filamentProfileId: fil.id,
           copies: items.reduce((n, i) => n + i.copies, 0),
           autoOrient: b.autoOrient,
-          autoPrint: b.autoPrint,
+          // A draft is reviewed before anything goes to the printer.
+          autoPrint: b.autoPrint && !b.draft,
+          draft: b.draft,
           arrange: b.arrange,
           bedType,
           overrides: JSON.stringify(b.overrides),
@@ -468,6 +473,7 @@ export class SlicingService extends EventEmitter<Events> {
     return this.db
       .select()
       .from(jobs)
+      .where(eq(jobs.draft, false))
       .orderBy(desc(jobs.createdAt))
       .limit(limit)
       .all()
@@ -495,6 +501,29 @@ export class SlicingService extends EventEmitter<Events> {
     if (j.status === 'waiting' && j.printerId) this.renumberQueue(j.printerId);
   }
 
+  /** Saves a reviewed draft so it shows up in the job list. */
+  keepJob(id: number): JobInfo {
+    const j = this.jobRow(id);
+    if (!j) throw new SlicingError('Auftrag nicht gefunden', 404);
+    if (j.draft) this.update(id, { draft: false });
+    return this.getJob(id)!;
+  }
+
+  private removeStaleDrafts() {
+    const stale = this.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.draft, true), lt(jobs.updatedAt, Date.now() - DRAFT_TTL_MS)))
+      .all();
+    for (const { id } of stale) {
+      try {
+        this.deleteJob(id);
+      } catch {
+        /* uploading: try again later */
+      }
+    }
+  }
+
   retryJob(id: number): JobInfo {
     const j = this.jobRow(id);
     if (!j) throw new SlicingError('Auftrag nicht gefunden', 404);
@@ -518,7 +547,7 @@ export class SlicingService extends EventEmitter<Events> {
     if (print && (st === 'printing' || st === 'paused')) throw new SlicingError('Auf dem Drucker läuft bereits ein Druck', 409);
 
     const before = j.status;
-    this.update(id, { status: 'uploading', error: null });
+    this.update(id, { status: 'uploading', error: null, draft: false });
     try {
       const printerPath = await uploadToPrinter(client, j.gcodePath, j.gcodeName, { print });
       this.update(id, {
@@ -554,7 +583,7 @@ export class SlicingService extends EventEmitter<Events> {
         .from(jobs)
         .where(and(eq(jobs.printerId, j.printerId), eq(jobs.status, 'waiting')))
         .get()?.m ?? 0;
-    this.update(id, { status: 'waiting', queuePosition: max + 1, error: null });
+    this.update(id, { status: 'waiting', queuePosition: max + 1, error: null, draft: false });
     void this.tryStart(j.printerId);
     return this.getJob(id)!;
   }
@@ -677,6 +706,7 @@ export class SlicingService extends EventEmitter<Events> {
 
   start() {
     this.refreshSummaries();
+    this.removeStaleDrafts();
     // Leftovers of slices interrupted by a crash or restart.
     for (const d of fs.readdirSync(this.dirs.work)) fs.rmSync(path.join(this.dirs.work, d), { recursive: true, force: true });
     // Interrupted by a restart: slice again / fall back to the sliced state.
@@ -911,6 +941,7 @@ export class SlicingService extends EventEmitter<Events> {
       autoOrient: j.autoOrient,
       autoPrint: j.autoPrint,
       arrange: j.arrange,
+      draft: j.draft,
       bedType: bedTypeSchema.safeParse(j.bedType).data ?? null,
       error: j.error,
       gcodeName: j.gcodeName,

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { JobInfo, JobStatus } from '@printhub/shared';
 import { api } from './api';
 import { live, useLive } from './live';
@@ -15,7 +15,13 @@ export function useJobs() {
         .catch(() => {});
     }
   }, [jobs, connection]);
-  return jobs;
+  // Drafts belong to the job wizard until they are saved.
+  return useMemo(() => jobs && jobs.filter((j) => !j.draft), [jobs]);
+}
+
+/** One job by id, including unsaved drafts (kept current by push messages). */
+export function useLiveJob(id: number | undefined): JobInfo | undefined {
+  return useLive((s) => (id === undefined ? undefined : s.jobs?.find((j) => j.id === id)));
 }
 
 export const JOB_STATUS: Record<JobStatus, { label: string; tone: Tone }> = {

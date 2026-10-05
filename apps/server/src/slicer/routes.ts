@@ -165,6 +165,8 @@ export async function slicerRoutes(
       return job;
     });
 
+    admin.post('/jobs/:id/keep', async (req) => slicing.keepJob(idParams.parse(req.params).id));
+
     admin.post('/jobs/:id/retry', async (req) => slicing.retryJob(idParams.parse(req.params).id));
 
     admin.post('/jobs/:id/enqueue', async (req) => {

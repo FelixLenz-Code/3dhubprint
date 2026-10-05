@@ -165,6 +165,8 @@ export interface JobInfo {
   /** false = parts were placed manually. */
   arrange: boolean;
   bedType: BedType | null;
+  /** Not saved yet (job wizard review). */
+  draft: boolean;
   error: string | null;
   gcodeName: string | null;
   printerPath: string | null;
@@ -207,6 +209,8 @@ export const createJobSchema = z
     filament: z.string().min(1).max(256),
     autoOrient: z.boolean().default(false),
     autoPrint: z.boolean().default(false),
+    /** Slice for review only: hidden from lists until saved (sending/queueing saves it too). */
+    draft: z.boolean().default(false),
     /** false: keep the positions given per model instead of letting Orca arrange the plate. */
     arrange: z.boolean().default(true),
     /** Default: the printer's plate. */

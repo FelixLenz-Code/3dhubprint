@@ -169,4 +169,8 @@ export const migrations: string[] = [
   ALTER TABLE jobs ADD COLUMN arrange INTEGER NOT NULL DEFAULT 1;
   ALTER TABLE job_models ADD COLUMN transform TEXT;
   `,
+  `
+  -- Job wizard: slice first, review, then save.
+  ALTER TABLE jobs ADD COLUMN draft INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

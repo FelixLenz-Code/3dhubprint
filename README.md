@@ -28,15 +28,17 @@ PrintHub enthält OrcaSlicer 2.4.2 (im Docker-Image, headless). Ablauf:
    automatisch auf die passenden beschränkt (`compatible_printers`), lassen sich aber auch
    ausdrücklich freigeben. Außerdem die **Druckplatte** (glatte/texturierte PEI, Cool Plate …):
    Sie bestimmt, welche Betttemperatur aus dem Filamentprofil gilt.
-3. **Aufträge → Neuer Auftrag:** Ein oder mehrere Modelle hochladen bzw. aus der Bibliothek
-   wählen (je mit Stückzahl, OrcaSlicer verteilt alles auf dem Bett), Drucker, Qualität,
-   Filament und bei Bedarf Abweichungen vom Profil: Stützen (Baum/Normal, nur auf dem Bett,
-   Überhangwinkel), Brim, Skirt und Vasenmodus. Nach dem Slicen: *Drucken*, *Nur übertragen*
-   oder G-Code herunterladen.
-   Im **3D-Druckbett** lassen sich Teile drehen (90°-Schritte oder „Fläche aufs Bett legen“),
-   skalieren (auch Einheiten-Umrechnung für Modelle in Zoll/cm/m) und, mit ausgeschaltetem
-   „Automatisch anordnen“, frei auf dem Bett verschieben. Überhänge, die ohne Stützen in die Luft
-   gedruckt würden, werden rot markiert; dann schlägt PrintHub vor, Stützen zu aktivieren.
+3. **Aufträge → Neuer Auftrag** führt in vier Schritten durch den Auftrag:
+   1. *Modelle & Drucker:* Modelle hochladen oder aus der Bibliothek wählen, Drucker wählen.
+   2. *Druckbett:* Alle Teile in 3D auf dem Bett. Pro Teil: Stückzahl, **Einheit** (mm/cm/Zoll/m
+      für falsch skalierte Dateien), Drehen in 90°-Schritten oder „Fläche aufs Bett legen“,
+      Größe in %. Mit ausgeschaltetem „Automatisch anordnen“ lassen sich die Teile frei
+      verschieben. Überhänge, die ohne Stützen in die Luft gedruckt würden, werden pro Teil
+      gemeldet und rot markiert, mit „Stützen aktivieren“.
+   3. *Einstellungen:* Qualität, Druckplatte, Filament, Stützen/Brim/Skirt/Vasenmodus.
+   4. *Prüfen:* PrintHub slict und zeigt Vorschau, Druckdauer, Filament und Kosten. Dann
+      *Speichern*, *Nur übertragen*, *Drucken* oder *In Warteschlange*. Erst dann erscheint
+      der Auftrag in der Liste. „Zurück zum Druckbett“ verwirft das Ergebnis.
 4. **Schnelldruck** auf jeder Druckerseite: Modelle hochladen → Druckdauer, Filament und
    Materialkosten ansehen → *Drucken*. Vorbelegt mit den zuletzt genutzten Profilen.
 

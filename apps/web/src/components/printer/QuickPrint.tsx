@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, Clock, Coins, FileText, Layers, ListPlus, Play, Send, Settings2, Weight, Zap } from 'lucide-react';
+import { ChevronDown, Clock, Coins, FileText, Layers, ListPlus, Play, Save, Send, Settings2, Weight, Zap } from 'lucide-react';
 import type { JobInfo, PrinterProfileAssignment, PrinterSummary, SliceOverrides, SlicerProfileInfo, SlicerStatus } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { toast, useAction } from '../../lib/feedback';
@@ -103,7 +103,7 @@ function QuickPrint({ printer, onDone }: { printer: PrinterSummary; onDone: () =
   };
 
   if (job) {
-    return <Result job={job} printer={printer} filament={filaments.find((f) => f.name === fil)} onBack={reset} onDone={onDone} />;
+    return <SliceResult job={job} printer={printer} filament={filaments.find((f) => f.name === fil)} onBack={reset} onDone={onDone} />;
   }
 
   return (
@@ -161,18 +161,24 @@ function Select({ label, value, onChange, options }: { label: string; value: str
   );
 }
 
-function Result({
+/** Sliced job: preview, time, filament, cost, then print, transfer or queue (and, for wizard drafts, save). */
+export function SliceResult({
   job,
   printer,
   filament,
   onBack,
   onDone,
+  onSave,
+  backLabel = 'Einstellungen ändern',
 }: {
   job: JobInfo;
   printer: PrinterSummary;
   filament?: SlicerProfileInfo;
   onBack: () => void;
   onDone: () => void;
+  /** Offers "Speichern" (keep the job without sending it). */
+  onSave?: () => void;
+  backLabel?: string;
 }) {
   const { busy, run } = useAction();
   const [log, setLog] = useState<string>();
@@ -202,7 +208,7 @@ function Result({
         {log !== undefined && <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-3 font-mono text-xs">{log || '(kein Log)'}</pre>}
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onBack}>
-            Einstellungen ändern
+            {backLabel}
           </Button>
           <Button variant="ghost" onClick={async () => setLog((await api<{ log: string }>(`/jobs/${job.id}/log`)).log)}>
             <FileText className="size-4" /> Log
@@ -241,7 +247,9 @@ function Result({
       </div>
 
       {offline ? (
-        <Alert tone="warning">Der Drucker ist nicht verbunden. Der Auftrag bleibt unter „Aufträge“ gespeichert.</Alert>
+        <Alert tone="warning">
+          Der Drucker ist nicht verbunden. {onSave ? 'Du kannst den Auftrag speichern und später drucken.' : 'Der Auftrag bleibt unter „Aufträge“ gespeichert.'}
+        </Alert>
       ) : busyPrinter ? (
         <Alert tone="warning">Auf dem Drucker läuft gerade ein Druck. Stell den Auftrag in die Warteschlange; er startet, sobald du das Bett danach freigibst.</Alert>
       ) : (
@@ -250,8 +258,13 @@ function Result({
 
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" onClick={onBack} className="mr-auto">
-          Einstellungen ändern
+          {backLabel}
         </Button>
+        {onSave && (
+          <Button variant="secondary" onClick={onSave}>
+            <Save className="size-4" /> Speichern
+          </Button>
+        )}
         {busyPrinter ? (
           <Button
             onClick={() =>

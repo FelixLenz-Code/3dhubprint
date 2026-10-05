@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { AlertTriangle, Eye, Footprints, RotateCcw, RotateCw, Scan, Undo2 } from 'lucide-react';
+import { AlertTriangle, Eye, Footprints, Minus, Plus, RotateCcw, RotateCw, Scan, Undo2 } from 'lucide-react';
 import type { BufferGeometry } from 'three';
 import type { ModelInfo, ModelTransform } from '@printhub/shared';
 import { ApiError } from '../../lib/api';
 import { findOverhangs } from '../../lib/overhang';
-import { IDENTITY, axisAngle, cleanQuat, faceDown, layout, mulQuat, orient, rotatedSize, type Bed, type OrientedMesh, type PlateReport } from '../../lib/plate';
+import { IDENTITY, axisAngle, cleanQuat, faceDown, layout, mulQuat, orient, rotatedSize, type Bed, type OrientedMesh, type PlateReport, OVERHANG_WARN_MM2 } from '../../lib/plate';
 import { Alert, Button, Input, Spinner } from '../ui';
 import type { PlateItem } from './ModelPicker';
 import { PlateScene, buildGeometry, type SceneObject } from './plateScene';
@@ -41,6 +41,8 @@ export default function PlateEditor({
   onArrangeChange,
   autoOrient,
   supportAngle,
+  supportOn,
+  onEnableSupport,
   onReport,
 }: {
   items: PlateItem[];
@@ -52,11 +54,15 @@ export default function PlateEditor({
   autoOrient: boolean;
   /** Slope (° from horizontal) below which Orca adds supports. */
   supportAngle: number;
+  /** Supports enabled by the profile or the job's overrides. */
+  supportOn: boolean;
+  onEnableSupport: () => void;
   onReport: (r: PlateReport) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<PlateScene | null>(null);
-  const [selected, setSelected] = useState<number | null>(null);
+  // The first part starts selected so its tools are visible right away.
+  const [selected, setSelected] = useState<number | null>(items.length ? 0 : null);
   const [tool, setTool] = useState<'move' | 'face'>('move');
   const [showOverhangs, setShowOverhangs] = useState(true);
   const latest = useRef({ items, onChange });
@@ -236,164 +242,217 @@ export default function PlateEditor({
     );
   };
 
-  const sel = selected !== null ? items[selected] : undefined;
-  const selModel = sel && models.get(sel.modelId);
-  const update = (patch: Partial<ModelTransform>) => {
-    if (selected === null) return;
-    onChange(items.map((it, idx) => (idx === selected ? { ...it, transform: { ...transformOf(it), ...patch } } : it)));
-  };
-  const rotate = (axis: 'x' | 'y' | 'z', deg: number) => sel && update({ rotation: cleanQuat(mulQuat(axisAngle(axis, deg), transformOf(sel).rotation)) });
-  const scale = sel ? transformOf(sel).scale : 1;
-  const tiny = selModel && Math.max(...selModel.dimensions) < 5 && scale === 1;
+  const updateItem = (idx: number, patch: Partial<ModelTransform>) =>
+    onChange(items.map((it, i) => (i === idx ? { ...it, transform: { ...transformOf(it), ...patch } } : it)));
+  const setCopies = (idx: number, copies: number) =>
+    onChange(items.map((it, i) => (i === idx ? { ...it, copies: Math.min(50, Math.max(1, copies)) } : it)));
+  const rotate = (idx: number, axis: 'x' | 'y' | 'z', deg: number) =>
+    updateItem(idx, { rotation: cleanQuat(mulQuat(axisAngle(axis, deg), transformOf(items[idx]!).rotation)) });
+
+  const overhanging = items
+    .map((it, idx) => ({ it, area: overhangs?.[idx]?.area ?? 0 }))
+    .filter((o) => o.area >= OVERHANG_WARN_MM2);
 
   return (
     <div className="space-y-3">
-      {items.length > 1 && (
-        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Teil wählen">
-          {items.map((it, idx) => (
-            <button
-              key={it.modelId}
-              type="button"
-              role="tab"
-              aria-selected={selected === idx}
-              onClick={() => setSelected(selected === idx ? null : idx)}
-              className={clsx(
-                'max-w-48 truncate rounded-full border px-3 py-1 text-sm',
-                selected === idx ? 'border-accent bg-accent/10 text-text' : 'border-border text-text-2 hover:border-text-3',
-              )}
-            >
-              {models.get(it.modelId)?.name ?? 'Modell'}
-              {it.copies > 1 && ` ×${it.copies}`}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="relative h-[22rem] overflow-hidden rounded-xl border border-border bg-surface-2 sm:h-[28rem]">
-        <div ref={host} className="absolute inset-0" />
-        {(loading || failed) && (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-text-2">
-            {failed ? 'Modell konnte nicht geladen werden' : <Spinner />}
-          </div>
-        )}
-        <div className="absolute right-2 top-2 flex gap-1">
-          <Button variant="secondary" className="size-8 min-h-8 px-0" onClick={() => scene.current?.resetView()} aria-label="Ansicht zurücksetzen" title="Ansicht zurücksetzen">
-            <Scan className="size-4" />
-          </Button>
-          <Button variant="secondary" className="size-8 min-h-8 px-0" onClick={() => scene.current?.resetView(true)} aria-label="Von oben" title="Von oben">
-            <Eye className="size-4" />
-          </Button>
-        </div>
-        {tool === 'face' && (
-          <div className="absolute inset-x-2 bottom-2 rounded-lg bg-surface/95 px-3 py-2 text-sm shadow">
-            Tippe auf die Fläche, die auf dem Druckbett liegen soll.{' '}
-            <button className="text-accent underline" onClick={() => setTool('move')}>
-              Abbrechen
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-text-2">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={arrange} onChange={(e) => onArrangeChange(e.target.checked)} className="accent-[var(--accent)]" />
-          Automatisch anordnen (OrcaSlicer)
-        </label>
-        {!arrange && (
-          <button type="button" onClick={relayout} className="text-accent hover:underline">
-            Neu anordnen
-          </button>
-        )}
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={showOverhangs} onChange={(e) => setShowOverhangs(e.target.checked)} className="accent-[var(--accent)]" />
-          Überhänge rot markieren
-        </label>
-      </div>
-      <p className="text-xs text-text-3">
-        {arrange
-          ? 'Die Anordnung oben ist nur eine Vorschau, OrcaSlicer verteilt die Teile beim Slicen selbst. Zum Verschieben „Automatisch anordnen“ ausschalten.'
-          : 'Teile mit dem Finger oder der Maus auf dem Bett verschieben. Ansicht drehen: auf freie Fläche ziehen.'}{' '}
-        Teil antippen zum Drehen oder Skalieren.
-      </p>
-
-      {sel && selModel && (
-        <div className="space-y-3 rounded-xl border border-border p-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="font-medium">{selModel.name}</span>
-            <span className="tabular text-xs text-text-3">
-              {sizes[selected!]!.map((v) => v.toFixed(1)).join(' × ')} mm
-            </span>
-          </div>
-
-          {autoOrient ? (
-            <p className="text-sm text-text-3">„Automatisch ausrichten“ ist an: OrcaSlicer wählt die Lage selbst.</p>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex flex-wrap gap-1.5">
-                <Button variant={tool === 'face' ? 'primary' : 'secondary'} onClick={() => setTool(tool === 'face' ? 'move' : 'face')}>
-                  <Footprints className="size-4" /> Fläche aufs Bett legen
-                </Button>
-                <Button variant="ghost" onClick={() => update({ rotation: IDENTITY })} disabled={transformOf(sel).rotation.join() === IDENTITY.join()}>
-                  <Undo2 className="size-4" /> Lage zurücksetzen
-                </Button>
+      <div className="flex flex-col gap-3 lg:flex-row">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="relative h-[22rem] overflow-hidden rounded-xl border border-border bg-surface-2 sm:h-[32rem]">
+            <div ref={host} className="absolute inset-0" />
+            {(loading || failed) && (
+              <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-text-2">
+                {failed ? 'Modell konnte nicht geladen werden' : <Spinner />}
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {(['x', 'y', 'z'] as const).map((axis) => (
-                  <div key={axis} className="flex items-center gap-1 rounded-lg border border-border px-1.5 py-1">
-                    <span className="w-4 text-center text-xs font-semibold uppercase text-text-2">{axis}</span>
-                    <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(axis, -90)} aria-label={`${axis.toUpperCase()} −90°`} title="−90°">
-                      <RotateCcw className="size-4" />
+            )}
+            <div className="absolute right-2 top-2 flex gap-1">
+              <Button variant="secondary" className="size-8 min-h-8 px-0" onClick={() => scene.current?.resetView()} aria-label="Ansicht zurücksetzen" title="Ansicht zurücksetzen">
+                <Scan className="size-4" />
+              </Button>
+              <Button variant="secondary" className="size-8 min-h-8 px-0" onClick={() => scene.current?.resetView(true)} aria-label="Von oben" title="Von oben">
+                <Eye className="size-4" />
+              </Button>
+            </div>
+            {tool === 'face' && (
+              <div className="absolute inset-x-2 bottom-2 rounded-lg bg-surface/95 px-3 py-2 text-sm shadow">
+                Tippe auf die Fläche, die auf dem Druckbett liegen soll.{' '}
+                <button className="text-accent underline" onClick={() => setTool('move')}>
+                  Abbrechen
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-text-2">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={arrange} onChange={(e) => onArrangeChange(e.target.checked)} className="accent-[var(--accent)]" />
+              Automatisch anordnen (OrcaSlicer)
+            </label>
+            {!arrange && (
+              <button type="button" onClick={relayout} className="text-accent hover:underline">
+                Neu anordnen
+              </button>
+            )}
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={showOverhangs} onChange={(e) => setShowOverhangs(e.target.checked)} className="accent-[var(--accent)]" />
+              Überhänge rot markieren
+            </label>
+          </div>
+          <p className="text-xs text-text-3">
+            {arrange
+              ? 'Die Anordnung ist eine Vorschau, OrcaSlicer verteilt die Teile beim Slicen. Zum freien Verschieben „Automatisch anordnen“ ausschalten.'
+              : 'Teile mit Finger oder Maus verschieben. Ansicht drehen: auf freie Fläche ziehen, zoomen: Mausrad oder zwei Finger.'}
+          </p>
+        </div>
+
+        <div className="space-y-2 lg:w-80 lg:shrink-0">
+          <div className="text-sm font-medium">Teile</div>
+          {items.map((it, idx) => {
+            const m = models.get(it.modelId);
+            const t = transformOf(it);
+            const open = selected === idx;
+            const unit = UNITS.find((u) => Math.abs(t.scale - u.factor) < 1e-9);
+            const area = overhangs?.[idx]?.area;
+            const tiny = m && Math.max(...m.dimensions) * t.scale < 5;
+            return (
+              <div
+                key={it.modelId}
+                className={clsx('rounded-xl border p-2.5 transition-colors', open ? 'border-accent bg-accent/5' : 'border-border')}
+              >
+                <button type="button" onClick={() => setSelected(open ? null : idx)} className="flex w-full items-center gap-2.5 text-left" aria-expanded={open}>
+                  {m && <img src={m.thumbnailUrl} alt="" className="size-10 shrink-0 rounded-md bg-surface-2 object-contain" />}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{m?.name ?? 'Modell'}</div>
+                    <div className="tabular text-xs text-text-3">{sizes[idx]!.map((v) => v.toFixed(1)).join(' × ')} mm</div>
+                  </div>
+                </button>
+
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+                  <div className="flex items-center gap-1">
+                    <Button variant="secondary" className="size-7 min-h-7 px-0" onClick={() => setCopies(idx, it.copies - 1)} aria-label="Weniger">
+                      <Minus className="size-3" />
                     </Button>
-                    <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(axis, 90)} aria-label={`${axis.toUpperCase()} +90°`} title="+90°">
-                      <RotateCw className="size-4" />
+                    <span className="tabular w-7 text-center font-semibold" aria-label="Stückzahl">
+                      ×{it.copies}
+                    </span>
+                    <Button variant="secondary" className="size-7 min-h-7 px-0" onClick={() => setCopies(idx, it.copies + 1)} aria-label="Mehr">
+                      <Plus className="size-3" />
                     </Button>
-                    {axis === 'z' && (
+                  </div>
+                  <label className="flex items-center gap-1 text-text-2">
+                    Einheit
+                    <select
+                      value={unit?.label ?? 'custom'}
+                      onChange={(e) => {
+                        const u = UNITS.find((x) => x.label === e.target.value);
+                        if (u) updateItem(idx, { scale: u.factor });
+                      }}
+                      className="min-h-7 rounded-md border border-border bg-surface px-1.5 text-xs text-text"
+                      aria-label={`Einheit von ${m?.name ?? 'Modell'}`}
+                    >
+                      {UNITS.map((u) => (
+                        <option key={u.label} value={u.label}>
+                          {u.label}
+                        </option>
+                      ))}
+                      {!unit && <option value="custom">{Math.round(t.scale * 1000) / 10} %</option>}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-1.5 text-xs">
+                  {autoOrient ? null : area === undefined ? (
+                    <span className="text-text-3">Überhänge werden geprüft…</span>
+                  ) : area >= OVERHANG_WARN_MM2 ? (
+                    <span className="font-medium text-critical">Überhang ≈ {Math.max(1, Math.round(area / 100))} cm², braucht Stützen</span>
+                  ) : (
+                    <span className="text-good">Keine kritischen Überhänge</span>
+                  )}
+                </div>
+                {tiny && (
+                  <div className="mt-1 text-xs text-warning">Sehr klein: vermutlich in Zoll oder cm gezeichnet. Einheit oben umstellen.</div>
+                )}
+
+                {open && (
+                  <div className="mt-3 space-y-2 border-t border-border pt-3">
+                    {autoOrient ? (
+                      <p className="text-xs text-text-3">„Automatisch ausrichten“ ist an: OrcaSlicer wählt die Lage selbst.</p>
+                    ) : (
                       <>
-                        <Button variant="ghost" className="h-8 min-h-8 px-1.5 text-xs" onClick={() => rotate('z', -15)}>
-                          −15°
+                        <Button variant={tool === 'face' ? 'primary' : 'secondary'} className="w-full" onClick={() => setTool(tool === 'face' ? 'move' : 'face')}>
+                          <Footprints className="size-4" /> Fläche aufs Bett legen
                         </Button>
-                        <Button variant="ghost" className="h-8 min-h-8 px-1.5 text-xs" onClick={() => rotate('z', 15)}>
-                          +15°
-                        </Button>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(['x', 'y', 'z'] as const).map((axis) => (
+                            <div key={axis} className="flex items-center justify-center gap-0.5 rounded-lg border border-border py-0.5">
+                              <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(idx, axis, -90)} aria-label={`${axis.toUpperCase()} −90°`} title="−90°">
+                                <RotateCcw className="size-4" />
+                              </Button>
+                              <span className="w-3 text-center text-xs font-semibold uppercase text-text-2">{axis}</span>
+                              <Button variant="ghost" className="size-8 min-h-8 px-0" onClick={() => rotate(idx, axis, 90)} aria-label={`${axis.toUpperCase()} +90°`} title="+90°">
+                                <RotateCw className="size-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" className="h-8 min-h-8 flex-1 px-1.5 text-xs" onClick={() => rotate(idx, 'z', -15)}>
+                            Z −15°
+                          </Button>
+                          <Button variant="ghost" className="h-8 min-h-8 flex-1 px-1.5 text-xs" onClick={() => rotate(idx, 'z', 15)}>
+                            Z +15°
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="h-8 min-h-8 flex-1 px-1.5 text-xs"
+                            onClick={() => updateItem(idx, { rotation: IDENTITY })}
+                            disabled={t.rotation.join() === IDENTITY.join()}
+                          >
+                            <Undo2 className="size-3.5" /> Lage
+                          </Button>
+                        </div>
                       </>
                     )}
+                    <label className="flex items-center gap-2 text-xs text-text-2">
+                      Größe
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100000}
+                        step={1}
+                        value={Math.round(t.scale * 1000) / 10}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (v > 0) updateItem(idx, { scale: v / 100 });
+                        }}
+                        className="h-8 min-h-8 w-24"
+                        aria-label="Skalierung in Prozent"
+                      />
+                      %
+                    </label>
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="text-text-2">Größe</span>
-            <Input
-              type="number"
-              min={1}
-              max={100000}
-              step={1}
-              value={Math.round(scale * 1000) / 10}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (v > 0) update({ scale: v / 100 });
-              }}
-              className="w-28"
-              aria-label="Skalierung in Prozent"
-            />
-            <span className="text-text-2">%</span>
-            <span className="ml-2 text-text-3">Modell in</span>
-            {UNITS.map((u) => (
-              <Button key={u.label} variant={Math.abs(scale - u.factor) < 1e-9 ? 'primary' : 'secondary'} className="h-8 min-h-8 px-2.5 text-xs" onClick={() => update({ scale: u.factor })}>
-                {u.label}
-              </Button>
-            ))}
-          </div>
-          {tiny && (
-            <Alert tone="warning">
-              Das Modell ist nur {selModel.dimensions.map((v) => v.toFixed(1)).join(' × ')} mm groß. Vermutlich wurde es in Zoll oder Zentimetern gezeichnet:
-              oben die passende Einheit wählen.
-            </Alert>
-          )}
+            );
+          })}
         </div>
-      )}
+      </div>
 
+      {overhanging.length > 0 && !supportOn && (
+        <Alert tone="warning">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="min-w-0 flex-1">
+              <AlertTriangle className="mr-1 inline size-4" />
+              {overhanging.map((o) => models.get(o.it.modelId)?.name).join(', ')}: Überhänge würden ohne Stützen in die Luft gedruckt (rot markiert, oft auf der
+              Unterseite). Anders hinlegen oder Stützen aktivieren.
+            </span>
+            <Button variant="secondary" onClick={onEnableSupport}>
+              Stützen aktivieren
+            </Button>
+          </div>
+        </Alert>
+      )}
+      {overhanging.length > 0 && supportOn && (
+        <Alert tone="good">Stützen sind aktiviert, die rot markierten Überhänge werden gestützt.</Alert>
+      )}
       {outside.length > 0 && (
         <Alert tone="critical">
           <AlertTriangle className="mr-1 inline size-4" />
