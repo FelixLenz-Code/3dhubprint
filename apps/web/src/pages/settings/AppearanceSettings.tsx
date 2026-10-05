@@ -13,6 +13,7 @@ const OPTIONS: { value: ThemePref; label: string; icon: typeof Sun }[] = [
 export function AppearanceSettings() {
   const [pref, setPref] = useState(getThemePref);
   return (
+    <div className="space-y-6">
     <Card className="p-5">
       <h2 className="mb-1 font-semibold">Farbschema</h2>
       <p className="mb-4 text-sm text-text-2">Wird nur auf diesem Gerät gespeichert.</p>
@@ -35,5 +36,17 @@ export function AppearanceSettings() {
         ))}
       </div>
     </Card>
+    <Card className="p-5 text-sm text-text-2">
+      <h2 className="mb-1 font-semibold text-text">Über PrintHub</h2>
+      Freie Software unter der{' '}
+      <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noreferrer" className="text-accent hover:underline">
+        GNU AGPL v3
+      </a>
+      . Quellcode:{' '}
+      <a href="https://github.com/FelixLenz-Code/3dhubprint" target="_blank" rel="noreferrer" className="text-accent hover:underline">
+        github.com/FelixLenz-Code/3dhubprint
+      </a>
+    </Card>
+    </div>
   );
 }

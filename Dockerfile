@@ -21,6 +21,7 @@ RUN pnpm -r build \
 FROM node:22-bookworm-slim
 ARG APP_VERSION=dev
 LABEL org.opencontainers.image.source="https://github.com/FelixLenz-Code/3dhubprint" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.description="PrintHub: Verwaltung für Klipper/Moonraker-3D-Drucker" \
       org.opencontainers.image.version="$APP_VERSION"
 ENV NODE_ENV=production \

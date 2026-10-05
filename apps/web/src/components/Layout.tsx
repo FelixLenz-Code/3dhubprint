@@ -51,7 +51,13 @@ export function Layout({ user }: { user: Me }) {
         <div className="mt-auto flex items-center justify-between gap-2 border-t border-border px-2 pt-4 text-sm">
           <div className="min-w-0">
             <div className="truncate text-text-2">{user.username}</div>
-            {health.data && <div className="truncate text-xs text-text-3">Version {health.data.version}</div>}
+            <div className="truncate text-xs text-text-3">
+              {health.data && `Version ${health.data.version} · `}
+              {/* AGPL §13: offer the source to everyone using the app over the network. */}
+              <a href="https://github.com/FelixLenz-Code/3dhubprint" target="_blank" rel="noreferrer" className="hover:text-text">
+                Quellcode
+              </a>
+            </div>
           </div>
           <button onClick={logout} className="rounded-lg p-2 text-text-3 hover:bg-surface-2 hover:text-text" title="Abmelden">
             <LogOut className="size-4" />

@@ -157,3 +157,22 @@ Für die CLI müssen sie gegen die System-Profile aufgelöst werden und `type` e
 Das aufgelöste Maschinenprofil muss `inherits: <System-Druckername>` behalten, und die
 Prozess-/Filamentprofile müssen diesen Namen in `compatible_printers` führen, sonst bricht
 die CLI mit „printer is not compatible with the process preset“ (-17) ab.
+
+## Lizenz
+
+PrintHub steht unter der [GNU Affero General Public License v3.0 oder neuer](LICENSE)
+(`AGPL-3.0-or-later`). Kurz: Du darfst PrintHub frei nutzen, ändern und weitergeben. Wer eine
+geänderte Version anderen über das Netzwerk anbietet, muss deren Quellcode ebenfalls unter der
+AGPL bereitstellen.
+
+Die Lizenz wurde gewählt, weil sie zu allen verwendeten Komponenten passt:
+
+| Komponente | Lizenz | Verhältnis zu PrintHub |
+|---|---|---|
+| npm-Abhängigkeiten (Fastify, React, better-sqlite3, Drizzle, …) | MIT, ISC, BSD, Apache-2.0, BlueOak | permissiv, mit AGPL kompatibel |
+| OrcaSlicer-Profile (`fixtures/`, ab Phase 3 im Image) | AGPL-3.0 | gleiche Lizenzfamilie |
+| OrcaSlicer (Slicer-Worker, ab Phase 3) | AGPL-3.0 | separates Programm, per CLI aufgerufen |
+| Klipper, Moonraker | GPL-3.0 | nur über die Netzwerk-API angesprochen |
+
+Details zu Drittkomponenten: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
