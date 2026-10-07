@@ -87,7 +87,8 @@ Lupen-Symbol). Pro Drucker wählbar:
 
 Eingerichtet wird die Erkennung so:
 
-1. Im Kamerabild einen Rahmen um die Druckfläche ziehen.
+1. Im Kamerabild die Druckfläche mit dem Lasso umfahren. Nur die Fläche innerhalb der Linie wird
+   verglichen, Druckkopf, Rahmen und Hintergrund bleiben außen vor.
 2. Mindestens ein Bild des leeren Betts speichern, am besten in der Position nach einem Druck.
    Bei mehreren Druckplatten für jede Platte ein Bild speichern.
 3. Die Methode wählen (jederzeit umschaltbar):

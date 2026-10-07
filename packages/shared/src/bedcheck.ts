@@ -17,9 +17,12 @@ export type BedCheckMethod = keyof typeof BED_CHECK_METHODS;
 
 const frac = z.number().min(0).max(1);
 
-/** Part of the camera image that shows the bed, as fractions of width/height. */
+/**
+ * Part of the camera image that shows the bed, as fractions of width/height: the bounding box,
+ * and the outline drawn with the lasso (without it, the whole box counts).
+ */
 export const bedRegionSchema = z
-  .object({ x0: frac, y0: frac, x1: frac, y1: frac })
+  .object({ x0: frac, y0: frac, x1: frac, y1: frac, points: z.array(z.tuple([frac, frac])).min(3).max(256).optional() })
   .refine((r) => r.x1 - r.x0 >= 0.05 && r.y1 - r.y0 >= 0.05, 'Bereich ist zu klein');
 export type BedRegion = z.infer<typeof bedRegionSchema>;
 

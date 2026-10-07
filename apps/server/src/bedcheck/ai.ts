@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { InferenceSession } from 'onnxruntime-node';
-import type { Region, Rgba } from './analyze.js';
+import { insideOutline, type Region, type Rgba } from './analyze.js';
 
 /**
  * Learned bed check: a pretrained vision model (DINOv2-small) describes every 14×14 patch of
@@ -86,6 +86,9 @@ export async function embed(img: Rgba, r: Region): Promise<PatchFeatures> {
   };
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
+      // The model looks at the whole crop at once, so what lies outside the outline must not reach it:
+      // those pixels stay 0, the average color it was trained on.
+      if (r.points && !insideOutline(r.points, x0 / img.width + ((x + 0.5) / W) * (cw / img.width), y0 / img.height + ((y + 0.5) / H) * (ch / img.height))) continue;
       for (let k = 0; k < 3; k++) {
         let v = 0;
         for (let j = 0; j < sub; j++) for (let i = 0; i < sub; i++) v += at(y0 + ((y + (j + 0.5) / sub) * ch) / H, x0 + ((x + (i + 0.5) / sub) * cw) / W, k);
@@ -144,14 +147,16 @@ function distances(cur: PatchFeatures, ref: PatchFeatures): Float32Array {
 /**
  * Compares the current bed with the empty-bed images. The references that match best overall
  * (typically the same plate) are kept, and each patch takes its closest match among them.
+ * Patches outside the lasso outline (`mask` 0) are ignored.
  */
-export function compareAi(cur: PatchFeatures, refs: PatchFeatures[]): AiComparison | undefined {
+export function compareAi(cur: PatchFeatures, refs: PatchFeatures[], mask?: Uint8Array): AiComparison | undefined {
   const scored: { i: number; d: Float32Array; mean: number }[] = [];
   refs.forEach((ref, i) => {
     if (ref.cols !== cur.cols || ref.rows !== cur.rows || ref.dim !== cur.dim) return;
     const d = distances(cur, ref);
+    if (mask) d.forEach((_, k) => !mask[k] && (d[k] = 0));
     // A robust overall score: the mean of the better 80 %, so a part on the bed doesn't decide which plate it is.
-    const sorted = Float32Array.from(d).sort();
+    const sorted = Float32Array.from(d.filter((_, k) => !mask || mask[k])).sort();
     const keep = Math.max(1, Math.floor(sorted.length * 0.8));
     let sum = 0;
     for (let k = 0; k < keep; k++) sum += sorted[k]!;

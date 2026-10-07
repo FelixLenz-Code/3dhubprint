@@ -19,7 +19,7 @@ import type { PrinterManager } from '../printers/manager.js';
 import type { PrintEvent } from '../printers/events.js';
 import { webcamUrl } from '../printers/routes.js';
 import type { SlicingService } from '../slicer/service.js';
-import { compare, decodeJpeg, extractFeatures, renderOverlay, verdict, cellThreshold, type Features, type Region, type Rgba } from './analyze.js';
+import { compare, decodeJpeg, extractFeatures, gridMask, renderOverlay, verdict, cellThreshold, type Features, type Region, type Rgba } from './analyze.js';
 import { aiThreshold, compareAi, embed, modelAvailable, type PatchFeatures } from './ai.js';
 
 export class BedCheckError extends Error {
@@ -361,7 +361,8 @@ export class BedCheckService {
     const region = s.region!;
     if (s.method === 'ai' && modelAvailable()) {
       try {
-        const cmp = compareAi(await embed(img, region), await this.referenceEmbeddings(printerId, region));
+        const cur = await embed(img, region);
+        const cmp = compareAi(cur, await this.referenceEmbeddings(printerId, region), gridMask(region, cur.cols, cur.rows));
         if (cmp) return { method: 'ai', cols: cmp.cols, rows: cmp.rows, cells: cmp.cells, threshold: aiThreshold(s.sensitivity) };
       } catch (err) {
         this.log.warn({ printer: printerId, err: (err as Error).message }, 'bed check: AI model failed, using the classic comparison');
@@ -374,7 +375,7 @@ export class BedCheckService {
   private async referenceEmbeddings(printerId: number, region: Region): Promise<PatchFeatures[]> {
     const out: PatchFeatures[] = [];
     for (const r of this.references(printerId)) {
-      const key = `${r.id}:${region.x0},${region.y0},${region.x1},${region.y1}`;
+      const key = `${r.id}:${JSON.stringify(region)}`;
       let f = this.embeddings.get(key);
       if (!f) {
         let img: Rgba;
@@ -394,7 +395,7 @@ export class BedCheckService {
   private referenceFeatures(printerId: number, region: Region): Features[] {
     const out: Features[] = [];
     for (const r of this.references(printerId)) {
-      const key = `${r.id}:${region.x0},${region.y0},${region.x1},${region.y1}`;
+      const key = `${r.id}:${JSON.stringify(region)}`;
       let f = this.features.get(key);
       if (!f) {
         try {

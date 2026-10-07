@@ -150,6 +150,25 @@ describe('bed check', () => {
     expect((await api<BedCheckInfo>(`/api/printers/${printerId}/bed-check`)).body.references).toHaveLength(2);
   });
 
+  it('only compares what lies inside the lasso outline', async () => {
+    // L-shape: its bounding box contains the part, the outline does not.
+    const points: [number, number][] = [
+      [0.05, 0.55],
+      [0.95, 0.55],
+      [0.95, 0.65],
+      [0.4, 0.65],
+      [0.4, 0.95],
+      [0.05, 0.95],
+    ];
+    const lasso = { x0: 0.05, y0: 0.55, x1: 0.95, y1: 0.95, points };
+    expect((await api(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'confirm', region: lasso } })).status).toBe(200);
+    frame = scene({ part: [230, 110, 30] });
+    expect((await run()).verdict).toBe('clear');
+    await api(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'confirm', region: { ...lasso, points: [...points.slice(0, 3), [0.95, 0.95], [0.05, 0.95]] } } });
+    expect((await run()).verdict).toBe('occupied');
+    expect((await api(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'confirm', region: { ...lasso, points: [[0.1, 0.6]] } } })).status).toBe(400);
+  });
+
   it('switching the camera drops the pictures of the old one', async () => {
     const info = await api<BedCheckInfo>(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'confirm', region, webcam: 1 } });
     expect(info.body.references).toHaveLength(0);

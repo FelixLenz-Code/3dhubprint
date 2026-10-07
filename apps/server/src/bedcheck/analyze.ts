@@ -1,12 +1,16 @@
 import jpeg from 'jpeg-js';
 import { encodePng } from '../slicer/png.js';
 
-/** Part of the camera image that shows the bed, as fractions of width/height. */
+/**
+ * Part of the camera image that shows the bed, as fractions of width/height: bounding box and,
+ * if drawn with the lasso, its outline. Only what lies inside the outline is compared.
+ */
 export interface Region {
   x0: number;
   y0: number;
   x1: number;
   y1: number;
+  points?: [number, number][];
 }
 
 export interface Rgba {
@@ -25,6 +29,8 @@ export interface Features {
   height: number;
   /** Channel-interleaved: Y, R−Y, B−Y per pixel. */
   px: Float32Array;
+  /** 1 for pixels inside the outline. */
+  mask: Uint8Array;
 }
 
 const CHANNELS = 3;
@@ -74,14 +80,40 @@ export function extractFeatures(img: Rgba, r: Region): Features {
     }
   }
   for (let i = 0; i < n; i++) for (let k = 0; k < CHANNELS; k++) px[i * CHANNELS + k]! /= Math.max(1, count[i]!);
+  // Lighting is taken from the bed alone, not from what lies around the outline.
+  const mask = gridMask(r, width, height);
+  const inside = Math.max(1, mask.reduce((a, v) => a + v, 0));
   const mean = [0, 0, 0];
-  for (let i = 0; i < n; i++) for (let k = 0; k < CHANNELS; k++) mean[k]! += px[i * CHANNELS + k]! / n;
+  for (let i = 0; i < n; i++) if (mask[i]) for (let k = 0; k < CHANNELS; k++) mean[k]! += px[i * CHANNELS + k]! / inside;
   let variance = 0;
-  for (let i = 0; i < n; i++) variance += (px[i * CHANNELS]! - mean[0]!) ** 2;
+  for (let i = 0; i < n; i++) if (mask[i]) variance += (px[i * CHANNELS]! - mean[0]!) ** 2;
   // A floor keeps a uniformly lit, featureless bed from blowing up sensor noise.
-  const std = Math.max(8, Math.sqrt(variance / n));
+  const std = Math.max(8, Math.sqrt(variance / inside));
   for (let i = 0; i < n; i++) for (let k = 0; k < CHANNELS; k++) px[i * CHANNELS + k] = (px[i * CHANNELS + k]! - mean[k]!) / std;
-  return { width, height, px };
+  return { width, height, px, mask };
+}
+
+/** Whether the point (fractions of the image) lies inside the outline (even-odd rule). */
+export function insideOutline(pts: [number, number][], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i]!, [xj, yj] = pts[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** For a cols × rows grid laid over the bounding box: 1 where the cell center is inside the outline. */
+export function gridMask(r: Region, cols: number, rows: number): Uint8Array {
+  const mask = new Uint8Array(cols * rows).fill(1);
+  if (!r.points) return mask;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const fx = r.x0 + ((x + 0.5) / cols) * (r.x1 - r.x0), fy = r.y0 + ((y + 0.5) / rows) * (r.y1 - r.y0);
+      if (!insideOutline(r.points, fx, fy)) mask[y * cols + x] = 0;
+    }
+  }
+  return mask;
 }
 
 /**
@@ -103,14 +135,17 @@ export function compare(current: Features, references: Features[]): Comparison |
         for (let y = SHIFT; y < h - SHIFT; y++) {
           const cy = Math.min(rows - 1, Math.floor((y * rows) / h));
           for (let x = SHIFT; x < w - SHIFT; x++) {
+            if (!current.mask[y * w + x]) continue;
             const c = cy * cols + Math.min(cols - 1, Math.floor((x * cols) / w));
             const a = (y * w + x) * CHANNELS, b = ((y + dy) * w + x + dx) * CHANNELS;
             for (let k = 0; k < CHANNELS; k++) cells[c]! += Math.abs(current.px[a + k]! - ref.px[b + k]!);
             n[c]!++;
           }
         }
+        // A cell cut by the outline counts once a third of it is bed; slivers are mostly noise.
+        const full = ((w - 2 * SHIFT) * (h - 2 * SHIFT)) / (cols * rows);
         let total = 0;
-        for (let i = 0; i < cells.length; i++) total += cells[i] = n[i] ? cells[i]! / n[i]! : 0;
+        for (let i = 0; i < cells.length; i++) total += cells[i] = n[i]! >= full / 3 ? cells[i]! / n[i]! : 0;
         if (total < bestTotal) {
           bestTotal = total;
           best = { cells, cols, rows, reference };
@@ -175,16 +210,26 @@ export function renderOverlay(img: Rgba, r: Region, cmp: { cols: number; rows: n
       }
     }
   }
-  for (let t = 0; t < 2; t++) {
-    for (let x = rx0; x <= rx1; x++) {
-      tint(x, ry0 + t, [34, 197, 94], 1);
-      tint(x, ry1 - t, [34, 197, 94], 1);
-    }
+  const outline: [number, number][] = r.points ?? [
+    [r.x0, r.y0],
+    [r.x1, r.y0],
+    [r.x1, r.y1],
+    [r.x0, r.y1],
+  ];
+  // Dim what the check ignores, then draw the outline.
+  if (r.points) {
     for (let y = ry0; y <= ry1; y++) {
-      tint(rx0 + t, y, [34, 197, 94], 1);
-      tint(rx1 - t, y, [34, 197, 94], 1);
+      for (let x = rx0; x <= rx1; x++) if (!insideOutline(r.points, (x + 0.5) / W, (y + 0.5) / H)) tint(x, y, [0, 0, 0], 0.45);
     }
   }
+  outline.forEach(([ax, ay], i) => {
+    const [bx, by] = outline[(i + 1) % outline.length]!;
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(bx - ax) * W, Math.abs(by - ay) * H)));
+    for (let k = 0; k <= steps; k++) {
+      const x = Math.round((ax + ((bx - ax) * k) / steps) * W), y = Math.round((ay + ((by - ay) * k) / steps) * H);
+      for (let d = 0; d < 4; d++) tint(x - 1 + (d & 1), y - 1 + (d >> 1), [34, 197, 94], 1);
+    }
+  });
   return encodePng(W, H, out);
 }
 

@@ -168,7 +168,10 @@ function BedCheckForm({ printer, onDone }: { printer: PrinterSummary; onDone: ()
                 <RefreshCw className="size-3.5" /> Neues Bild
               </Button>
             </div>
-            <p className="text-sm text-text-2">Im Kamerabild einen Rahmen um die Druckfläche ziehen. Nur dieser Bereich wird verglichen; Druckkopf und Hintergrund möglichst weglassen.</p>
+            <p className="text-sm text-text-2">
+              Im Kamerabild die Druckfläche mit dem Lasso umfahren: Maustaste oder Finger gedrückt halten und loslassen, wenn die Form geschlossen ist. Nur die
+              Fläche innerhalb der Linie wird verglichen; Druckkopf, Rahmen und Hintergrund möglichst weglassen. Erneutes Umfahren ersetzt die Form.
+            </p>
             {connected ? (
               <RegionEditor src={`${cam.snapshotUrl}?t=${tick}`} region={draft.region} onChange={(region) => setDraft({ ...draft, region })} />
             ) : (
@@ -291,24 +294,56 @@ export function CheckResult({ printerId, result }: { printerId: number; result: 
   );
 }
 
-/** Camera image on which a rectangle is dragged; coordinates are fractions of the image. */
+type Point = [number, number];
+
+/** Drops points that barely change the outline (Ramer–Douglas–Peucker). */
+function simplify(pts: Point[], eps: number): Point[] {
+  if (pts.length < 3) return pts;
+  const [ax, ay] = pts[0]!, [bx, by] = pts[pts.length - 1]!;
+  const len = Math.hypot(bx - ax, by - ay);
+  let worst = 0, at = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i]!;
+    const d = len ? Math.abs((bx - ax) * (ay - py) - (ax - px) * (by - ay)) / len : Math.hypot(px - ax, py - ay);
+    if (d > worst) [worst, at] = [d, i];
+  }
+  if (worst <= eps) return [pts[0]!, pts[pts.length - 1]!];
+  return [...simplify(pts.slice(0, at + 1), eps).slice(0, -1), ...simplify(pts.slice(at), eps)];
+}
+
+/** The drawn path as a region: outline with at most 256 points, plus its bounding box. */
+function toRegion(path: Point[]): BedRegion | null {
+  let pts = path;
+  for (let eps = 0.002; ; eps *= 1.5) {
+    pts = simplify(path, eps);
+    if (pts.length <= 256) break;
+  }
+  if (pts.length < 3) return null;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const r = { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys), points: pts };
+  return r.x1 - r.x0 >= 0.05 && r.y1 - r.y0 >= 0.05 ? r : null;
+}
+
+const outlineOf = (r: BedRegion): Point[] =>
+  r.points ?? [
+    [r.x0, r.y0],
+    [r.x1, r.y0],
+    [r.x1, r.y1],
+    [r.x0, r.y1],
+  ];
+
+/** Camera image on which the bed is circled with a lasso; coordinates are fractions of the image. */
 function RegionEditor({ src, region, onChange }: { src: string; region: BedRegion | null; onChange: (r: BedRegion | null) => void }) {
   const box = useRef<HTMLDivElement>(null);
-  const start = useRef<[number, number] | null>(null);
-  const [live, setLive] = useState<BedRegion | null>(null);
+  const [path, setPath] = useState<Point[] | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const shown = live ?? region;
 
-  const pos = (e: ReactPointerEvent): [number, number] => {
+  const pos = (e: ReactPointerEvent): Point => {
     const r = box.current!.getBoundingClientRect();
     return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
   };
-  const rect = (a: [number, number], b: [number, number]): BedRegion => ({
-    x0: Math.min(a[0], b[0]),
-    y0: Math.min(a[1], b[1]),
-    x1: Math.max(a[0], b[0]),
-    y1: Math.max(a[1], b[1]),
-  });
+  const points = (pts: Point[]) => pts.map(([x, y]) => `${x},${y}`).join(' ');
+  const outline = !path && region ? outlineOf(region) : null;
 
   return (
     <div
@@ -316,31 +351,38 @@ function RegionEditor({ src, region, onChange }: { src: string; region: BedRegio
       className="relative w-full max-w-xl cursor-crosshair touch-none select-none overflow-hidden rounded-lg bg-black"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
-        start.current = pos(e);
-        setLive(null);
+        setPath([pos(e)]);
       }}
       onPointerMove={(e) => {
-        if (start.current) setLive(rect(start.current, pos(e)));
+        if (!path) return;
+        const p = pos(e), last = path[path.length - 1]!;
+        if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) setPath([...path, p]);
       }}
-      onPointerUp={(e) => {
-        if (!start.current) return;
-        const r = rect(start.current, pos(e));
-        start.current = null;
-        setLive(null);
-        // A click without dragging keeps the old region.
-        if (r.x1 - r.x0 >= 0.05 && r.y1 - r.y0 >= 0.05) onChange(r);
+      onPointerUp={() => {
+        if (!path) return;
+        const r = toRegion(path);
+        setPath(null);
+        // A click or a tiny loop keeps the old outline.
+        if (r) onChange(r);
       }}
+      onPointerCancel={() => setPath(null)}
     >
       <img src={src} alt="Kamerabild" draggable={false} onLoad={() => setLoaded(true)} className="block w-full" />
       {!loaded && <Spinner className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" />}
-      {shown && (
-        <div
-          className="pointer-events-none absolute border-2 border-good bg-good/15"
-          style={{ left: `${shown.x0 * 100}%`, top: `${shown.y0 * 100}%`, width: `${(shown.x1 - shown.x0) * 100}%`, height: `${(shown.y1 - shown.y0) * 100}%` }}
-        />
-      )}
-      {!shown && loaded && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-xs text-white/80">Rahmen um das Druckbett ziehen</div>
+      <svg viewBox="0 0 1 1" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 size-full">
+        {outline && (
+          <>
+            {/* Everything outside the outline is ignored. */}
+            <path d={`M0,0H1V1H0Z M${points(outline)}Z`} fillRule="evenodd" className="fill-black/45" />
+            <polygon points={points(outline)} className="fill-good/15 stroke-good" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+          </>
+        )}
+        {path && path.length > 1 && (
+          <polyline points={points(path)} fill="none" className="stroke-good" strokeWidth={2} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+        )}
+      </svg>
+      {!region && !path && loaded && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-xs text-white/80">Druckfläche mit gedrückter Maustaste oder dem Finger umfahren</div>
       )}
     </div>
   );

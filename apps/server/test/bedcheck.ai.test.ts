@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aiThreshold, compareAi, embed, modelAvailable } from '../src/bedcheck/ai.js';
-import { verdict, type Rgba } from '../src/bedcheck/analyze.js';
+import { gridMask, verdict, type Region, type Rgba } from '../src/bedcheck/analyze.js';
 
 // Needs the model (`pnpm model`); the Docker image ships it.
 const region = { x0: 0.05, y0: 0.5, x1: 0.95, y1: 0.95 };
@@ -26,10 +26,19 @@ function scene(o: { plate?: [number, number, number]; light?: number; glare?: bo
 }
 
 describe.skipIf(!modelAvailable())('AI bed check', () => {
-  const check = async (img: Rgba, refs: Rgba[]) => {
-    const cmp = compareAi(await embed(img, region), await Promise.all(refs.map((r) => embed(r, region))));
+  const check = async (img: Rgba, refs: Rgba[], r: Region = region) => {
+    const cur = await embed(img, r);
+    const cmp = compareAi(cur, await Promise.all(refs.map((ref) => embed(ref, r))), gridMask(r, cur.cols, cur.rows));
     return verdict(cmp!.cells, aiThreshold(3)).verdict;
   };
+
+  it('ignores a part outside the lasso outline', async () => {
+    // Left part of the bed only; the part sits at x ≈ 0.44–0.52.
+    const lasso: Region = { ...region, points: [[0.05, 0.5], [0.35, 0.5], [0.35, 0.95], [0.05, 0.95]] };
+    const refs = [scene({ seed: 1 }), scene({ seed: 2 })];
+    expect(await check(scene({ seed: 3, part: [200, 60, 40] }), refs, lasso)).toBe('clear');
+    expect(await check(scene({ seed: 3, part: [200, 60, 40] }), refs)).toBe('occupied');
+  }, 30_000);
 
   it('ignores light changes but sees a part, also one in the color of the plate', async () => {
     const refs = [scene({ seed: 1 }), scene({ seed: 2 })];
