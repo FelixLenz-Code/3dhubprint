@@ -35,6 +35,10 @@ export const envSchema = z.object({
   MAX_MODEL_MB: z.coerce.number().positive().default(300),
   /** Overridable for tests. */
   THINGIVERSE_API: z.string().url().default('https://api.thingiverse.com'),
+  /** Spoolman installed alongside PrintHub (printhub spoolman on): fixed address, e.g. http://spoolman:8000. */
+  SPOOLMAN_URL: z.string().url().optional(),
+  /** Address of that Spoolman's web interface for browsers in the LAN. */
+  SPOOLMAN_WEB_URL: z.string().url().optional(),
   /** Set by the Docker build (git tag or commit). */
   APP_VERSION: z.string().default('dev'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

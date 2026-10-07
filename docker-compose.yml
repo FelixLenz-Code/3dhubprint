@@ -12,3 +12,13 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/data
+
+  # Optional: docker compose --profile spoolman up
+  spoolman:
+    image: ghcr.io/donkie/spoolman:0.27.0
+    profiles: [spoolman]
+    restart: unless-stopped
+    ports:
+      - "7912:8000"
+    volumes:
+      - ./spoolman:/home/app/.local/share/spoolman

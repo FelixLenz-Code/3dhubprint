@@ -64,7 +64,10 @@ export interface PrinterStatus {
   heaterBed?: HeaterState;
   /** Other temperature sensors/heaters, keyed by object name. */
   sensors?: Record<string, HeaterState>;
+  /** Part cooling fan, 0..1. */
   fanSpeed?: number;
+  /** All fans by Klipper object name (see capabilities.fans), 0..1. */
+  fans?: Record<string, number>;
   speedFactor?: number;
   extrudeFactor?: number;
   position?: [number, number, number, number];

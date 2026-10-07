@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { Clock, Coins, FileText, Layers, ListPlus, Play, Save, Send, Weight } from 'lucide-react';
-import type { JobInfo, PrinterSummary, SlicerProfileInfo } from '@printhub/shared';
+import { estimateCost, spoolLabel, type JobInfo, type PrinterSummary, type SlicerProfileInfo } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { toast, useAction } from '../../lib/feedback';
 import { formatClock, formatDuration, formatFilament, isActivePrint } from '../../lib/format';
 import { JOB_STATUS } from '../../lib/jobs';
+import { formatMoney, formatWeight, useCostSettings, usePrinterSpool, useSpoolmanStatus } from '../../lib/stats';
 import { Alert, Button, Spinner } from '../ui';
 import { describeOverrides } from './SliceOptions';
 import { PlatePreview } from './PlatePreview';
@@ -32,10 +33,17 @@ export function SliceResult({
   const [log, setLog] = useState<string>();
   const busyPrinter = isActivePrint(printer.status);
   const offline = printer.status.connection !== 'connected';
+  const costSettings = useCostSettings().data;
+  const spoolman = useSpoolmanStatus().data;
+  const spool = usePrinterSpool(printer.id, !!spoolman?.configured).data?.spool ?? null;
+  const material = filament?.summary.material !== undefined ? String(filament.summary.material) : undefined;
+  const spoolMismatch = !!spool?.material && !!material && spool.material.toUpperCase() !== material.toUpperCase();
   const cost = useMemo(() => {
-    const perKg = Number(filament?.summary.cost);
-    return job.filamentG !== null && perKg > 0 ? (job.filamentG / 1000) * perKg : undefined;
-  }, [job.filamentG, filament]);
+    if (!costSettings || job.filamentG === null) return undefined;
+    const profilePrice = Number(filament?.summary.cost);
+    const pricePerKg = (!spoolMismatch && spool?.pricePerKg) || (profilePrice > 0 ? profilePrice : null);
+    return estimateCost({ grams: job.filamentG, pricePerKg, seconds: job.estimatedTime, printerId: printer.id }, costSettings);
+  }, [costSettings, job.filamentG, job.estimatedTime, filament, spool, spoolMismatch, printer.id]);
 
   if (job.status === 'queued' || job.status === 'slicing') {
     return (
@@ -91,8 +99,24 @@ export function SliceResult({
         <Tile icon={Clock} label="Druckdauer" value={formatDuration(job.estimatedTime ?? undefined)} sub={`fertig ca. ${formatClock(job.estimatedTime ?? undefined)}`} />
         <Tile icon={Layers} label="Filament" value={formatFilament(job.filamentMm ?? undefined)} />
         <Tile icon={Weight} label="Gewicht" value={job.filamentG !== null ? `${job.filamentG.toFixed(1).replace('.', ',')} g` : '–'} />
-        <Tile icon={Coins} label="Materialkosten" value={cost !== undefined ? cost.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' }) : '–'} />
+        <Tile
+          icon={Coins}
+          label="Kosten"
+          value={formatMoney(cost?.total)}
+          sub={cost && `Material ${formatMoney(cost.material)} · Strom ${formatMoney(cost.energy)}${cost.wear ? ` · Verschleiß ${formatMoney(cost.wear)}` : ''}`}
+        />
       </div>
+
+      {spool && job.filamentG !== null && spool.remainingG !== null && spool.remainingG < job.filamentG && (
+        <Alert tone="warning">
+          Auf der Spule {spoolLabel(spool)} sind nur noch {formatWeight(spool.remainingG)}, der Druck braucht etwa {formatWeight(job.filamentG)}.
+        </Alert>
+      )}
+      {spoolMismatch && (
+        <Alert tone="warning">
+          Im Drucker ist laut Spoolman {spool!.material} ({spoolLabel(spool!)}) eingelegt, geslict wurde für {material}.
+        </Alert>
+      )}
 
       {offline ? (
         <Alert tone="warning">

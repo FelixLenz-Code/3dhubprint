@@ -10,7 +10,8 @@ import { useJobs, useLiveJob } from '../../lib/jobs';
 import { live, useLive } from '../../lib/live';
 import { allowedProfiles, effectiveBedType } from '../../lib/profiles';
 import type { Bed, PlateReport } from '../../lib/plate';
-import { Alert, Button, Card, Field, Input, Spinner } from '../ui';
+import { Alert, Badge, Button, Card, Field, Input, Spinner } from '../ui';
+import { isActivePrint, statusBadge } from '../../lib/format';
 import { ModelPicker, type PlateItem } from './ModelPicker';
 import { BedTypeSelect, ProfileSelect, describeFilament, describeProcess } from './ProfileSelect';
 import { SliceOptions } from './SliceOptions';
@@ -269,6 +270,8 @@ export function JobWizard({
               <div className="grid gap-2 sm:grid-cols-2">
                 {printers.map((p) => {
                   const a = assignments.data?.find((x) => x.printerId === p.id);
+                  const badge = statusBadge(p.status);
+                  const progress = isActivePrint(p.status) && p.status.progress !== undefined ? ` ${Math.round(p.status.progress * 100)} %` : '';
                   return (
                     <button
                       key={p.id}
@@ -280,7 +283,10 @@ export function JobWizard({
                       )}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium">{p.name}</div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-medium">{p.name}</span>
+                          <Badge tone={badge.tone}>{badge.label + progress}</Badge>
+                        </div>
                         <div className="truncate text-xs text-text-3">{a?.machine ?? 'Kein Druckerprofil zugeordnet'}</div>
                       </div>
                       {printerId === p.id && <Check className="size-5 shrink-0 text-accent" />}

@@ -16,6 +16,14 @@ Der Slicer-Worker ruft die OrcaSlicer-Kommandozeile als eigenständiges Programm
 OrcaSlicer mit einem PrintHub-Image ausgeliefert, gilt dafür dessen AGPL-3.0; der Quellcode ist
 unter obiger Adresse verfügbar.
 
+## Spoolman (optional)
+
+`printhub spoolman on` betreibt das unveränderte Image `ghcr.io/donkie/spoolman` als eigenen
+Container neben PrintHub; PrintHub spricht es nur über dessen REST-API an.
+
+- Projekt: https://github.com/Donkie/Spoolman
+- Lizenz: MIT
+
 ## npm-Pakete
 
 Die im Docker-Image enthaltenen npm-Pakete stehen unter permissiven Lizenzen (MIT, ISC,

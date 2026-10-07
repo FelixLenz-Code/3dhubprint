@@ -5,13 +5,12 @@ import { api } from '../../lib/api';
 import { useAction } from '../../lib/feedback';
 import { Button } from '../ui';
 
-/** Speed/flow multipliers and part fan: adjustable during a print. */
+/** Speed and flow multipliers: adjustable during a print. */
 export function TuningControls({ printer }: { printer: PrinterSummary }) {
   const s = printer.status;
   const { run } = useAction();
   const speed = Math.round((s.speedFactor ?? 1) * 100);
   const flow = Math.round((s.extrudeFactor ?? 1) * 100);
-  const fan = Math.round((s.fanSpeed ?? 0) * 100);
 
   return (
     <div className="space-y-3">
@@ -31,9 +30,6 @@ export function TuningControls({ printer }: { printer: PrinterSummary }) {
         step={1}
         onChange={(v) => run('flow', () => api(`/printers/${printer.id}/flow-factor`, { body: { percent: v } }))}
       />
-      {printer.capabilities?.hasFan && (
-        <FanSlider value={fan} onCommit={(v) => run('fan', () => api(`/printers/${printer.id}/fan`, { body: { percent: v } }))} />
-      )}
     </div>
   );
 }
@@ -73,7 +69,7 @@ function Stepper({
   );
 }
 
-function FanSlider({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
+export function FanSlider({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
   // Local value while dragging; only the released position is sent to the printer.
   const [local, setLocal] = useState(value);
   const [dragging, setDragging] = useState(false);
@@ -88,7 +84,9 @@ function FanSlider({ value, onCommit }: { value: number; onCommit: (v: number) =
 
   return (
     <label className="flex items-center gap-2">
-      <span className="w-32 text-sm text-text-2">Bauteillüfter</span>
+      <span className="w-32 shrink-0 truncate text-sm text-text-2" title={label}>
+        {label}
+      </span>
       <input
         type="range"
         min={0}

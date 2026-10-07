@@ -13,6 +13,7 @@ import { PrintControls } from '../components/printer/PrintControls';
 import { HeaterControl } from '../components/printer/HeaterControl';
 import { MotionCard } from '../components/printer/MotionCard';
 import { TuningControls } from '../components/printer/TuningCard';
+import { FanCard } from '../components/printer/FanCard';
 import { MacrosCard } from '../components/printer/MacrosCard';
 import { ExcludeObjects } from '../components/printer/ExcludeObjects';
 import { FilesTab } from '../components/printer/FilesTab';
@@ -20,6 +21,7 @@ import { HistoryTab } from '../components/printer/HistoryTab';
 import { ConsoleTab } from '../components/printer/ConsoleTab';
 import { QuickPrintButton } from '../components/printer/QuickPrint';
 import { BedBanner } from '../components/printer/BedBanner';
+import { SpoolCard } from '../components/printer/SpoolCard';
 import { thumbUrl } from '../lib/files';
 import { fileLabel, formatClock, formatDuration, formatFilament, formatTemp, isActivePrint, statusBadge } from '../lib/format';
 
@@ -208,21 +210,23 @@ function Overview({ printer, editable }: { printer: PrinterSummary; editable: bo
           )}
         </Card>
 
+        <SpoolCard printer={printer} editable={editable} />
+
         {connected && (
           <Card className="p-4 sm:p-5">
             <h2 className="mb-4 font-semibold">Feineinstellung</h2>
             {editable ? (
               <TuningControls printer={printer} />
             ) : (
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <Stat label="Geschwindigkeit" value={`${Math.round((s.speedFactor ?? 1) * 100)} %`} />
                 <Stat label="Fluss" value={`${Math.round((s.extrudeFactor ?? 1) * 100)} %`} />
-                <Stat label="Lüfter" value={`${Math.round((s.fanSpeed ?? 0) * 100)} %`} />
               </div>
             )}
           </Card>
         )}
 
+        {connected && <FanCard printer={printer} editable={editable} />}
         {connected && <MotionCard printer={printer} editable={editable} />}
         {connected && editable && <MacrosCard printer={printer} />}
       </div>

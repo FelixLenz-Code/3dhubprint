@@ -25,6 +25,8 @@ export const factorSchema = z.object({
 
 export const fanSchema = z.object({
   percent: z.number().int().min(0).max(100),
+  /** Klipper object of a controllable fan; default the part cooling fan ("fan"). */
+  fan: z.string().min(1).max(128).default('fan'),
 });
 
 export const gcodeSchema = z.object({
@@ -66,8 +68,19 @@ export interface PrinterCapabilities {
   heaters: HeaterInfo[];
   /** User-facing macros (names not starting with "_"). */
   macros: string[];
-  hasFan: boolean;
+  /** Part cooling fan first, then other controllable fans, then automatic ones. */
+  fans: FanInfo[];
   hasExcludeObject: boolean;
+}
+
+export interface FanInfo {
+  /** Klipper object, e.g. "fan", "fan_generic chamber", "heater_fan hotend_fan", "output_pin fan1". */
+  name: string;
+  label: string;
+  /** false: Klipper drives it (heater_fan, controller_fan, temperature_fan). */
+  controllable: boolean;
+  /** output_pin only: VALUE for 100 %. */
+  scale?: number;
 }
 
 export interface FileEntry {

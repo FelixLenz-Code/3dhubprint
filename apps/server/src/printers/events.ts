@@ -9,6 +9,8 @@ export type PrintEvent =
       result: 'complete' | 'cancelled' | 'error';
       message?: string;
       duration?: number;
+      /** Extruded filament (mm). */
+      filamentUsed?: number;
     }
   | { type: 'paused'; printerId: number; filename?: string; message?: string }
   | { type: 'klippy_error'; printerId: number; message?: string; wasPrinting: boolean; filename?: string }
@@ -33,7 +35,7 @@ export function diffStatus(printerId: number, prev: PrinterStatus, next: Printer
     if (wasActive && !ACTIVE.has(to ?? '')) {
       // Klipper reports "standby" after SDCARD_RESET_FILE or a cancel macro that resets the file.
       const result = to === 'complete' ? 'complete' : to === 'error' ? 'error' : 'cancelled';
-      events.push({ type: 'finished', printerId, filename, result, message: next.message, duration: prev.printDuration });
+      events.push({ type: 'finished', printerId, filename, result, message: next.message, duration: prev.printDuration, filamentUsed: next.filamentUsed ?? prev.filamentUsed });
     }
   }
 

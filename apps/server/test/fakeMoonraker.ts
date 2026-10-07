@@ -26,6 +26,14 @@ export class FakeMoonraker {
     exclude_object: { objects: [], excluded_objects: [], current_object: null },
   };
   objects = [...Object.keys(this.status), 'gcode_macro START_PRINT', 'gcode_macro _HELPER', 'gcode_macro M600', 'gcode_macro PARK'];
+  /** Moonraker history, newest first. */
+  history: Record<string, unknown>[] = [
+    { job_id: '0001', filename: 'a.gcode', status: 'completed', start_time: 1, end_time: 2, print_duration: 60, total_duration: 70, filament_used: 500, exists: true },
+  ];
+  components: string[] = ['history'];
+  webcams: Record<string, unknown>[] = [];
+  /** Active spool of Moonraker's Spoolman integration (components must include "spoolman"). */
+  spoolId: number | null = null;
   settings = { extruder: { min_temp: 0, max_temp: 270 }, heater_bed: { min_temp: 0, max_temp: 110 } };
   private server = http.createServer((req, res) => this.onHttp(req, res));
   private wss = new WebSocketServer({ server: this.server, path: '/websocket' });
@@ -73,9 +81,9 @@ export class FakeMoonraker {
       case 'server.connection.identify':
         return reply({ connection_id: 1 });
       case 'server.info':
-        return reply({ klippy_state: 'ready', klippy_connected: true });
+        return reply({ klippy_state: 'ready', klippy_connected: true, components: this.components });
       case 'server.webcams.list':
-        return reply({ webcams: [] });
+        return reply({ webcams: this.webcams });
       case 'printer.objects.list':
         return reply({ objects: this.objects });
       case 'printer.objects.subscribe':
@@ -103,11 +111,17 @@ export class FakeMoonraker {
           ],
           disk_usage: { total: 1000, used: 400, free: 600 },
         });
-      case 'server.history.list':
-        return reply({
-          count: 1,
-          jobs: [{ job_id: '0001', filename: 'a.gcode', status: 'completed', start_time: 1, end_time: 2, print_duration: 60, total_duration: 70, filament_used: 500, exists: true }],
-        });
+      case 'server.history.list': {
+        const start = Number(msg.params?.start ?? 0);
+        const jobs = this.history.slice(start, start + Number(msg.params?.limit ?? 50));
+        return reply({ count: jobs.length, jobs });
+      }
+      case 'server.spoolman.get_spool_id':
+        return reply({ spool_id: this.spoolId });
+      case 'server.spoolman.post_spool_id':
+        this.spoolId = (msg.params?.spool_id as number | null) ?? null;
+        this.notify('notify_active_spool_set', [{ spool_id: this.spoolId }]);
+        return reply({ spool_id: this.spoolId });
       case 'server.history.totals':
         return reply({ job_totals: { total_jobs: 1, total_print_time: 60, total_filament_used: 500, longest_print: 60 } });
       case 'printer.gcode.script':

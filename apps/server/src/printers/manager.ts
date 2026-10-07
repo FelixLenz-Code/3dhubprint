@@ -16,6 +16,8 @@ interface ManagerEvents {
   console: [number, ConsoleLine[]];
   /** Print lifecycle transitions (started, finished, paused, errors, idle). */
   print: [PrintEvent];
+  /** Moonraker's Spoolman integration changed the active spool. */
+  spool: [number, number | null];
   changed: [];
 }
 
@@ -146,6 +148,18 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
     this.emit('changed');
   }
 
+  /** Active spool remembered by PrintHub (printers without Moonraker's Spoolman integration). */
+  spoolId(id: number): number | null {
+    return this.rows.get(id)?.spoolId ?? null;
+  }
+
+  setSpoolId(id: number, spoolId: number | null) {
+    const row = this.rows.get(id);
+    if (!row || row.spoolId === spoolId) return;
+    this.db.update(printers).set({ spoolId }).where(eq(printers.id, id)).run();
+    this.rows.set(id, { ...row, spoolId });
+  }
+
   private onPrintEvent(e: PrintEvent) {
     // Any print that starts occupies the bed, whoever started it.
     if (e.type === 'started') this.setBedClear(e.printerId, false);
@@ -182,6 +196,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
     client.on('lifecycle', (s) => this.tracker.update(row.id, s));
     client.on('webcams', () => this.emit('changed'));
     client.on('capabilities', () => this.emit('changed'));
+    client.on('spool', (spoolId) => this.emit('spool', row.id, spoolId));
     client.on('gcode', (text) => {
       if (!CONSOLE_NOISE.test(text)) this.pushConsole(row.id, [{ t: Date.now(), text, kind: 'response' }]);
     });

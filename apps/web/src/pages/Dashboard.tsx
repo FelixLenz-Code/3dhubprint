@@ -5,9 +5,14 @@ import { PrinterCard } from '../components/PrinterCard';
 import { Button, Card, Spinner } from '../components/ui';
 import { isActivePrint } from '../lib/format';
 
+const MAX_LIVE_CAMS = 3;
+
 export function DashboardPage() {
   const printers = useLive((s) => s.printers);
   const connection = useLive((s) => s.connection);
+  // Live video for a few cameras. Each stream holds one of the browser's ~6 HTTP/1.1 connections
+  // per host, so with more cameras refreshing stills keep the app responsive.
+  const liveCams = printers.filter((p) => p.webcams.length > 0 && p.status.connection === 'connected').length <= MAX_LIVE_CAMS;
   const printing = printers.filter((p) => isActivePrint(p.status)).length;
   const online = printers.filter((p) => p.status.connection === 'connected').length;
 
@@ -44,7 +49,7 @@ export function DashboardPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {printers.map((p) => (
-            <PrinterCard key={p.id} printer={p} />
+            <PrinterCard key={p.id} printer={p} camMode={liveCams ? 'stream' : 'snapshot'} />
           ))}
         </div>
       )}

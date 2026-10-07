@@ -105,9 +105,16 @@ export class PrinterControl {
     return this.gcode(`M221 S${percent}`);
   }
 
-  async fan(percent: number): Promise<string> {
-    if (!this.requireReady().hasFan) throw new ControlError('invalid', 'Kein Bauteillüfter konfiguriert');
-    return this.gcode(`M106 S${Math.round((percent / 100) * 255)}`);
+  async fan(percent: number, name = 'fan'): Promise<string> {
+    const fan = this.requireReady().fans.find((f) => f.name === name);
+    if (!fan) throw new ControlError('invalid', name === 'fan' ? 'Kein Bauteillüfter konfiguriert' : `Unbekannter Lüfter: ${name}`);
+    if (!fan.controllable) throw new ControlError('invalid', `${fan.label} wird von Klipper automatisch geregelt`);
+    const short = name.slice(name.indexOf(' ') + 1);
+    if (name === 'fan') return this.gcode(`M106 S${Math.round((percent / 100) * 255)}`);
+    if (name.startsWith('fan_generic ')) return this.gcode(`SET_FAN_SPEED FAN=${short} SPEED=${(percent / 100).toFixed(2)}`);
+    const scale = fan.scale ?? 1;
+    const value = (percent / 100) * scale;
+    return this.gcode(`SET_PIN PIN=${short} VALUE=${scale > 1 ? Math.round(value) : value.toFixed(2)}`);
   }
 
   async macro(name: string): Promise<string> {

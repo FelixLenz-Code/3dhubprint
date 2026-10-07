@@ -1,7 +1,7 @@
 # PrintHub
 
 Selbst gehostete PWA zur Überwachung und Verwaltung von Klipper/Moonraker-3D-Druckern
-(Fluidd/Mainsail), mit Slicing über OrcaSlicer und Auftragsverwaltung (in Arbeit).
+(Fluidd/Mainsail), mit Slicing über OrcaSlicer, Auftragsverwaltung, Statistik und Kosten.
 
 ## Stand
 
@@ -12,8 +12,8 @@ Selbst gehostete PWA zur Überwachung und Verwaltung von Klipper/Moonraker-3D-Dr
 | 2 | Steuerung (Pause/Abbruch/Not-Aus, Temperaturen, Bewegen, Makros, Objekte ausschließen), Konsole, G-Code-Upload, Verlauf | erledigt |
 | 3 | Orca-Profilimport + Zuordnung, Modell-Bibliothek (STL/3MF/OBJ), Slicen mit OrcaSlicer, Aufträge, Schnelldruck | erledigt |
 | 4 | Warteschlange mit „Bett frei“-Bestätigung, Druckende erkennen, Web-Push | erledigt |
-| 5 | Thingiverse-Suche und -Import in die Modell-Bibliothek | **erledigt** |
-| 6 | Spoolman, Statistiken, Kosten | offen |
+| 5 | Thingiverse-Suche und -Import in die Modell-Bibliothek | erledigt |
+| 6 | Spoolman, Statistiken, Kosten | **erledigt** |
 
 ## Slicen
 
@@ -75,6 +75,52 @@ der Bestätigung „Bett frei – starten“ beginnt der nächste Auftrag. Ist d
 bestätigt und der Drucker untätig, startet ein neu eingereihter Auftrag sofort. PrintHub verfolgt
 gestartete Aufträge bis zum Ende (gedruckt, abgebrochen, fehlgeschlagen).
 
+## Statistik & Kosten
+
+PrintHub liest den Druckverlauf jedes Druckers aus Moonraker ein (beim Verbinden, nach jedem
+Druck und alle 30 Minuten), also auch Drucke, die über Fluidd/Mainsail gestartet wurden. Die Seite
+**Statistik** zeigt für 7/30/90 Tage, 12 Monate oder den gesamten Zeitraum: Anzahl und Erfolgsquote,
+Druckzeit, Filament (Gewicht) und Kosten, als Verlauf je Tag/Woche/Monat sowie nach Drucker und
+Material, dazu die Liste aller Drucke. Ein gelöschter Drucker behält seine Einträge.
+
+Kosten pro Druck (*Einstellungen → Kosten*):
+- **Material:** Gewicht × Preis pro kg. Der Preis kommt aus der Spoolman-Spule, sonst aus dem
+  Filamentprofil (OrcaSlicer: Filament → *Kosten*), sonst aus dem Standardpreis. Er wird beim
+  Einlesen des Drucks festgehalten; spätere Preisänderungen ändern alte Drucke nicht.
+- **Strom:** Leistung (Standard oder pro Drucker) × Gesamtdauer × Strompreis.
+- **Verschleiß** (optional): € pro Druckstunde und Drucker.
+
+Das Gewicht stammt aus dem Verhältnis von Gewicht und Länge laut Slicer, sonst aus Durchmesser
+und Dichte. Nach dem Slicen zeigt der Auftrags-Assistent die geschätzten Gesamtkosten.
+
+## Spoolman
+
+Optional, auf zwei Wegen:
+- **Mit PrintHub installieren:** im Installer die Frage nach Spoolman bejahen (oder `--spoolman`),
+  bzw. später `sudo printhub spoolman on`. Spoolman läuft dann als zweiter Container, ist in
+  PrintHub automatisch verbunden und steckt in jedem `printhub backup` (Update, Rollback und
+  Restore inklusive). Die Spoolman-Oberfläche ist im LAN unter `http://<server-ip>:7912`
+  erreichbar. **Spoolman hat kein Login: diesen Port nicht über nginx nach außen freigeben.**
+  `printhub spoolman off` entfernt den Container, die Daten bleiben in `/opt/printhub/spoolman`.
+- **Eigener Spoolman-Server:** *Einstellungen → Integrationen → Spoolman* mit dessen Adresse
+  (z. B. `http://192.168.1.20:7912`).
+
+Danach:
+- **Spulen anlegen** direkt in PrintHub (*Statistik → Filamentbestand → Spule anlegen* oder auf der
+  Druckerseite *Neue Spule*): von einem vorhandenen oder einem neuen Filament (Hersteller, Material,
+  Farbe, Gewicht, Preis), auch mehrere gleiche Spulen auf einmal. Restgewicht nach dem Nachwiegen
+  eintragen und leere Spulen archivieren geht ebenfalls; alles Weitere in der Spoolman-Oberfläche.
+- **Druckerseite:** aktive Spule wählen, Restmenge und Preis sehen; Warnung, wenn der laufende Druck
+  mehr braucht, als auf der Spule ist.
+- **Auftrags-Assistent:** Warnung, wenn die Spule nicht reicht oder ein anderes Material eingelegt ist.
+- **Statistik:** Filamentbestand aller Spulen.
+
+Verbrauch buchen: Hat ein Drucker Spoolman in seiner `moonraker.conf`
+(`[spoolman]` mit `server: http://<server-ip>:7912`), setzt
+PrintHub die aktive Spule über Moonraker, und Moonraker bucht den Verbrauch selbst. Sonst merkt
+sich PrintHub die Spule und bucht die gedruckte Filamentlänge nach jedem Druck in Spoolman. So
+wird nie doppelt gezählt.
+
 ## Benachrichtigungen
 
 *Einstellungen → Benachrichtigungen* aktiviert Web-Push für das jeweilige Gerät: Druck fertig,
@@ -95,6 +141,8 @@ apps/server/src/slicer/
   mesh.ts       STL/3MF/OBJ einlesen, Maße, Software-Renderer für Vorschaubilder
   orca.ts       OrcaSlicer-CLI aufrufen, G-Code-Statistik, Vorschaubilder einbetten
   service.ts    Profile (versioniert), Zuordnung, Modell-Bibliothek, Auftrags-Warteschlange
+apps/server/src/stats/service.ts     Moonraker-Verlauf spiegeln, Kosten, Auswertung nach Zeitraum
+apps/server/src/spoolman/service.ts  Spoolman-Anbindung, aktive Spule, Verbrauch buchen
 ```
 
 Der Server hält pro Drucker eine WebSocket-Verbindung zu Moonraker
@@ -121,7 +169,7 @@ Ohne Rückfragen, z. B. für Automatisierung:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FelixLenz-Code/3dhubprint/main/install.sh | sudo bash -s -- \
-  --yes --public-url https://drucker.example.de --trusted-proxies 192.168.1.5 --auto-update
+  --yes --public-url https://drucker.example.de --trusted-proxies 192.168.1.5 --auto-update --spoolman
 ```
 
 Danach die Adresse öffnen, das Admin-Konto anlegen und **sofort unter Einstellungen → Sicherheit
@@ -142,6 +190,7 @@ printhub backup            # Daten + .env nach /opt/printhub/backups (die letzte
 printhub restore [datei]
 printhub channel edge      # Entwicklungsstand statt Releases (stable)
 printhub auto-update on    # täglich 4–5 Uhr, mit Backup und Rollback
+printhub spoolman on       # Spoolman mitbetreiben (off: entfernen, Daten bleiben)
 printhub config            # .env bearbeiten und neu starten
 ```
 
@@ -258,6 +307,7 @@ Die Lizenz wurde gewählt, weil sie zu allen verwendeten Komponenten passt:
 | OrcaSlicer-Profile (`fixtures/`, ab Phase 3 im Image) | AGPL-3.0 | gleiche Lizenzfamilie |
 | OrcaSlicer (Slicer-Worker, ab Phase 3) | AGPL-3.0 | separates Programm, per CLI aufgerufen |
 | Klipper, Moonraker | GPL-3.0 | nur über die Netzwerk-API angesprochen |
+| Spoolman (optionaler Container) | MIT | separates Programm, über die REST-API angesprochen |
 
 Details zu Drittkomponenten: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

@@ -12,6 +12,7 @@ import { SettingsPage } from './pages/Settings';
 import { JobsPage } from './pages/JobsPage';
 import { EditJobPage, NewJobPage } from './pages/NewJobPage';
 import { ModelsPage } from './pages/ModelsPage';
+import { StatsPage } from './pages/StatsPage';
 
 export function App() {
   const { data, isLoading } = useAuth();
@@ -50,6 +51,7 @@ export function App() {
         <Route path="jobs/new" element={<NewJobPage />} />
         <Route path="jobs/:id/edit" element={<EditJobPage />} />
         <Route path="models" element={<ModelsPage />} />
+        <Route path="stats" element={<StatsPage />} />
         <Route path="settings/*" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

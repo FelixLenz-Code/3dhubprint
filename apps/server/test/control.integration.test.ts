@@ -38,6 +38,16 @@ const printer = async () => (await api(`/api/printers/${printerId}`)).body;
 
 beforeAll(async () => {
   fake = new FakeMoonraker();
+  // Extra fans of every kind Klipper offers.
+  const fans = {
+    'heater_fan hotend_fan': { speed: 1 },
+    'fan_generic chamber_fan': { speed: 0.25 },
+    'output_pin fan1': { value: 0.5 },
+    'output_pin beeper': { value: 0 },
+  };
+  Object.assign(fake.status, fans);
+  fake.objects.push(...Object.keys(fans));
+  Object.assign(fake.settings, { 'output_pin fan1': { pwm: true, scale: 255 }, 'output_pin beeper': { pwm: false } });
   const fakeUrl = await fake.start();
   app = await buildApp();
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -69,11 +79,39 @@ describe('capabilities', () => {
   });
 });
 
+describe('fans', () => {
+  it('lists every fan with its speed, part fan first and automatic ones last', async () => {
+    const p = await printer();
+    expect(p.capabilities.fans).toEqual([
+      { name: 'fan', label: 'Bauteillüfter', controllable: true },
+      { name: 'fan_generic chamber_fan', label: 'Gehäuselüfter', controllable: true },
+      { name: 'output_pin fan1', label: 'Zusatzlüfter', controllable: true, scale: 255 },
+      { name: 'heater_fan hotend_fan', label: 'Hotendlüfter', controllable: false },
+    ]);
+    expect(p.status.fans).toEqual({ fan: 0, 'heater_fan hotend_fan': 1, 'fan_generic chamber_fan': 0.25, 'output_pin fan1': 0.5 });
+  });
+
+  it('sets each kind of fan with its own command and refuses automatic or unknown fans', async () => {
+    expect((await api(`/api/printers/${printerId}/fan`, { body: { percent: 40 } })).status).toBe(200);
+    expect(fake.scripts.at(-1)).toBe('M106 S102');
+    expect((await api(`/api/printers/${printerId}/fan`, { body: { percent: 75, fan: 'fan_generic chamber_fan' } })).status).toBe(200);
+    expect(fake.scripts.at(-1)).toBe('SET_FAN_SPEED FAN=chamber_fan SPEED=0.75');
+    expect((await api(`/api/printers/${printerId}/fan`, { body: { percent: 100, fan: 'output_pin fan1' } })).status).toBe(200);
+    expect(fake.scripts.at(-1)).toBe('SET_PIN PIN=fan1 VALUE=255');
+    const n = fake.scripts.length;
+    for (const fan of ['heater_fan hotend_fan', 'output_pin beeper', 'fan_generic x\nM112']) {
+      expect((await api(`/api/printers/${printerId}/fan`, { body: { percent: 50, fan } })).status).toBe(400);
+    }
+    expect(fake.scripts).toHaveLength(n);
+  });
+});
+
 describe('temperature', () => {
   it('rejects targets above the configured maximum', async () => {
+    const n = fake.scripts.length;
     const r = await api(`/api/printers/${printerId}/temperature`, { body: { heater: 'extruder', target: 300 } });
     expect(r.status).toBe(400);
-    expect(fake.scripts).toHaveLength(0);
+    expect(fake.scripts).toHaveLength(n);
   });
 
   it('sends SET_HEATER_TEMPERATURE for valid targets', async () => {

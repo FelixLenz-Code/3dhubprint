@@ -27,6 +27,10 @@ import { NotificationService } from './notifications/service.js';
 import { pushRoutes } from './notifications/routes.js';
 import { ThingiverseError, ThingiverseService } from './thingiverse/service.js';
 import { thingiverseRoutes } from './thingiverse/routes.js';
+import { SpoolmanError, SpoolmanService } from './spoolman/service.js';
+import { spoolmanRoutes } from './spoolman/routes.js';
+import { StatsService } from './stats/service.js';
+import { statsRoutes } from './stats/routes.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -55,6 +59,11 @@ export async function buildApp() {
   const pushSubject = config.PUBLIC_URL?.startsWith('https://') ? config.PUBLIC_URL : 'mailto:printhub@localhost';
   const push = new NotificationService(db, box, app.log.child({ module: 'push' }), pushSubject);
   push.attach(manager, slicing);
+  const spoolman = new SpoolmanService(db, manager, app.log.child({ module: 'spoolman' }), {
+    url: config.SPOOLMAN_URL,
+    webUrl: config.SPOOLMAN_WEB_URL,
+  });
+  const stats = new StatsService(db, manager, spoolman, app.log.child({ module: 'stats' }));
   const tv = new ThingiverseService(db, box, slicing, {
     apiBase: config.THINGIVERSE_API,
     tmpDir: path.join(config.dataDir, 'tmp'),
@@ -97,6 +106,7 @@ export async function buildApp() {
     if (err instanceof AuthError) return reply.code(err.status).send({ error: err.code, message: err.message });
     if (err instanceof SlicingError) return reply.code(err.status).send({ error: 'slicing', message: err.message });
     if (err instanceof ThingiverseError) return reply.code(err.status).send({ error: 'thingiverse', message: err.message });
+    if (err instanceof SpoolmanError) return reply.code(err.status).send({ error: 'spoolman', message: err.message });
     if (err instanceof ControlError) {
       return reply.code(err.code === 'invalid' ? 400 : 409).send({ error: err.code, message: err.message });
     }
@@ -122,6 +132,8 @@ export async function buildApp() {
   });
   await app.register(pushRoutes, { prefix: '/api/push', push });
   await app.register(thingiverseRoutes, { prefix: '/api/thingiverse', tv, auth });
+  await app.register(spoolmanRoutes, { prefix: '/api', spoolman, manager, auth });
+  await app.register(statsRoutes, { prefix: '/api', stats, auth });
   await app.register(wsHub, { prefix: '/api', manager, auth, slicing });
 
   const webDist = config.WEB_DIST ?? path.resolve(import.meta.dirname, '../../web/dist');
@@ -152,9 +164,11 @@ export async function buildApp() {
   app.addHook('onReady', async () => {
     manager.start();
     slicing.start();
+    stats.start();
   });
   app.addHook('onClose', async () => {
     clearInterval(purge);
+    stats.stop();
     manager.stop();
     await slicing.stop();
     sqlite.close();

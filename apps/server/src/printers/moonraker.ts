@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import { config } from '../config.js';
 import type {
   ConnectionState,
+  FanInfo,
   FileMetadata,
   HeaterInfo,
   PrintState,
@@ -43,6 +44,8 @@ interface MoonrakerEvents {
   capabilities: [PrinterCapabilities];
   /** A line Klipper wrote to the G-code console. */
   gcode: [string];
+  /** Moonraker's Spoolman integration switched the active spool. */
+  spool: [number | null];
 }
 
 export class MoonrakerError extends Error {
@@ -79,6 +82,8 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
   private lifecycleKey = '';
   webcams: RawWebcam[] = [];
   capabilities?: PrinterCapabilities;
+  /** Moonraker components (from server.info), e.g. "spoolman", "history". */
+  components: string[] = [];
 
   constructor(
     readonly baseUrl: string,
@@ -201,8 +206,9 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
 
   private async checkKlippy() {
     clearTimeout(this.klippyTimer);
-    const info = await this.request<{ klippy_state: string; klippy_connected: boolean }>('server.info');
+    const info = await this.request<{ klippy_state: string; klippy_connected: boolean; components?: string[] }>('server.info');
     this.klippyState = info.klippy_state;
+    this.components = info.components ?? [];
     if (info.klippy_state === 'ready') {
       await this.subscribe();
       return;
@@ -240,7 +246,7 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
       'exclude_object',
     ];
     for (const o of objects) {
-      if (base.includes(o) || /^(temperature_sensor|temperature_fan|heater_generic) /.test(o)) wanted[o] = null;
+      if (base.includes(o) || /^(temperature_sensor|temperature_fan|heater_generic) /.test(o) || isFanObject(o)) wanted[o] = null;
     }
     const res = await this.request<{ status: RawStatus }>('printer.objects.subscribe', { objects: wanted });
     this.raw = res.status;
@@ -316,6 +322,9 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
         break;
       case 'notify_webcams_changed':
         void this.loadWebcams();
+        break;
+      case 'notify_active_spool_set':
+        this.emit('spool', ((msg.params?.[0] as { spool_id?: number | null } | undefined)?.spool_id ?? null) || null);
         break;
       case 'notify_metadata_update':
         void this.refreshFileMetadata(true);
@@ -437,6 +446,13 @@ export function deriveStatus(
       sensors[key.slice(key.indexOf(' ') + 1)] = { temperature: num(val.temperature)!, target: num(val.target) ?? 0 };
     }
   }
+  const fans: Record<string, number> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (!isFanObject(key) && !key.startsWith('temperature_fan ')) continue;
+    // Fans report "speed"; output_pin reports "value", already divided by its scale.
+    const v = num(val.speed) ?? num(val.value);
+    if (v !== undefined) fans[key] = v;
+  }
   const info = ps.info as { current_layer?: number | null; total_layer?: number | null } | undefined;
   const gm = raw.gcode_move ?? {};
   const th = raw.toolhead ?? {};
@@ -457,6 +473,7 @@ export function deriveStatus(
     heaterBed: heater(raw.heater_bed),
     sensors,
     fanSpeed: num(raw.fan?.speed),
+    fans,
     speedFactor: num(gm.speed_factor),
     extrudeFactor: num(gm.extrude_factor),
     position: (gm.gcode_position as PrinterStatus['position']) ?? undefined,
@@ -473,6 +490,55 @@ export function deriveStatus(
 }
 
 const HEATER_LABELS: Record<string, string> = { extruder: 'Düse', heater_bed: 'Bett' };
+
+/** Fan objects besides temperature_fan (that one is listed with the sensors too). */
+const isFanObject = (o: string) => o === 'fan' || /^(fan_generic|heater_fan|controller_fan) /.test(o) || /^output_pin \S*fan/i.test(o);
+
+// Stock Creality K1 firmware drives its fans as output pins.
+const FAN_LABELS: Record<string, string> = {
+  fan: 'Bauteillüfter',
+  'output_pin fan0': 'Bauteillüfter',
+  'output_pin fan1': 'Zusatzlüfter',
+  'output_pin fan2': 'Gehäuselüfter',
+};
+const FAN_WORDS: [RegExp, string][] = [
+  [/\b(hotend|heatbreak|extruder)\b/, 'Hotend'],
+  [/\b(chamber|case)\b/, 'Gehäuse'],
+  [/\b(aux|auxiliary|side)\b/, 'Zusatz'],
+  [/\b(exhaust)\b/, 'Abluft'],
+  [/\b(controller|mcu|board|electronics?)\b/, 'Elektronik'],
+  [/\b(nevermore|filter)\b/, 'Filter'],
+  [/\b(part|model|print)\b/, 'Bauteil'],
+];
+
+function fanLabel(o: string): string {
+  if (FAN_LABELS[o]) return FAN_LABELS[o];
+  const short = o.slice(o.indexOf(' ') + 1).toLowerCase().replace(/_/g, ' ');
+  const word = FAN_WORDS.find(([re]) => re.test(short))?.[1];
+  if (word) return `${word}lüfter`;
+  if (o.startsWith('controller_fan ')) return 'Elektroniklüfter';
+  const pretty = short.replace(/\bfan\b/g, '').trim() || short;
+  return `Lüfter ${pretty}`;
+}
+
+export function deriveFans(objects: string[], settings: Record<string, Record<string, unknown>>): FanInfo[] {
+  const fans: FanInfo[] = [];
+  for (const o of objects) {
+    if (o.startsWith('temperature_fan ')) {
+      fans.push({ name: o, label: fanLabel(o), controllable: false });
+    } else if (o.startsWith('output_pin ')) {
+      if (!isFanObject(o)) continue;
+      const cfg = settings[o.toLowerCase()] ?? {};
+      // Only PWM pins can run at partial speed.
+      if (cfg.pwm === false || cfg.pwm === 'False') continue;
+      fans.push({ name: o, label: fanLabel(o), controllable: true, scale: num(cfg.scale) ?? 1 });
+    } else if (isFanObject(o)) {
+      fans.push({ name: o, label: fanLabel(o), controllable: o === 'fan' || o.startsWith('fan_generic ') });
+    }
+  }
+  const rank = (f: FanInfo) => (f.name === 'fan' || f.name === 'output_pin fan0' ? 0 : f.controllable ? 1 : 2);
+  return fans.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+}
 
 /** Heaters with their configured limits and the user-facing macros. */
 export function deriveCapabilities(
@@ -504,7 +570,7 @@ export function deriveCapabilities(
   return {
     heaters,
     macros,
-    hasFan: objects.includes('fan'),
+    fans: deriveFans(objects, settings),
     hasExcludeObject: objects.includes('exclude_object'),
   };
 }

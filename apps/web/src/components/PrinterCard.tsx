@@ -6,7 +6,7 @@ import { Webcam } from './Webcam';
 import { BedBanner } from './printer/BedBanner';
 import { fileLabel, formatClock, formatDuration, formatTemp, isActivePrint, statusBadge } from '../lib/format';
 
-export function PrinterCard({ printer }: { printer: PrinterSummary }) {
+export function PrinterCard({ printer, camMode = 'snapshot' }: { printer: PrinterSummary; camMode?: 'stream' | 'snapshot' }) {
   const s = printer.status;
   const badge = statusBadge(s);
   const active = isActivePrint(s);
@@ -19,7 +19,7 @@ export function PrinterCard({ printer }: { printer: PrinterSummary }) {
     <Link to={`/printers/${printer.id}`} className="group block focus-visible:outline-none">
       <Card className="overflow-hidden transition-colors group-hover:border-text-3 group-focus-visible:border-accent">
         {cam && s.connection === 'connected' ? (
-          <Webcam cam={cam} mode="snapshot" />
+          <Webcam cam={cam} mode={camMode} />
         ) : (
           <div className="flex aspect-video items-center justify-center bg-surface-2">
             <PrinterIcon className="size-10 text-text-3" />

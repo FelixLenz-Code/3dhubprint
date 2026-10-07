@@ -40,8 +40,9 @@ export function PlatePreview({ preview, className }: { preview: { top: string; i
             <ToolpathViewer url={preview.paths} />
           </Suspense>
         ) : (
-          <div className="overflow-hidden rounded-xl bg-[#1a1a19]">
-            <img src={view === 'top' ? preview.top : preview.iso} alt={view === 'top' ? 'Druckbett von oben' : '3D-Ansicht der Druckteile'} className="mx-auto aspect-square w-full max-w-md object-contain" />
+          // Same frame as the 3D view; the image fills its height so the bed is shown as large as possible.
+          <div className="aspect-square w-full overflow-hidden rounded-xl bg-[#1a1a19] sm:aspect-[4/3]">
+            <img src={view === 'top' ? preview.top : preview.iso} alt={view === 'top' ? 'Druckbett von oben' : '3D-Ansicht der Druckteile'} className="size-full object-contain" />
           </div>
         )}
         <div className="absolute right-2 top-2 flex overflow-hidden rounded-lg border border-white/10 bg-black/50 text-xs backdrop-blur">
@@ -59,6 +60,7 @@ export function PlatePreview({ preview, className }: { preview: { top: string; i
         </div>
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-2">
+        {view === 'top' && <span className="text-text-3">Raster 5 cm</span>}
         {LEGEND.map(([label, color]) => (
           <span key={label} className="inline-flex items-center gap-1.5">
             <span className="size-2.5 rounded-sm" style={{ background: color }} aria-hidden />

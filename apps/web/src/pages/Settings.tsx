@@ -6,12 +6,14 @@ import { AppearanceSettings } from './settings/AppearanceSettings';
 import { SlicerSettings } from './settings/SlicerSettings';
 import { NotificationSettings } from './settings/NotificationSettings';
 import { IntegrationSettings } from './settings/IntegrationSettings';
+import { CostSettingsPage } from './settings/CostSettings';
 
 // Absolute paths: inside the "settings/*" splat route, relative links would resolve
 // against the current sub-page (e.g. /settings/printers/slicer).
 const TABS = [
   { to: '/settings/printers', label: 'Drucker' },
   { to: '/settings/slicer', label: 'Slicer' },
+  { to: '/settings/costs', label: 'Kosten' },
   { to: '/settings/notifications', label: 'Benachrichtigungen' },
   { to: '/settings/integrations', label: 'Integrationen' },
   { to: '/settings/security', label: 'Sicherheit' },
@@ -42,6 +44,7 @@ export function SettingsPage() {
         <Route index element={<Navigate to="/settings/printers" replace />} />
         <Route path="printers" element={<PrinterSettings />} />
         <Route path="slicer" element={<SlicerSettings />} />
+        <Route path="costs" element={<CostSettingsPage />} />
         <Route path="notifications" element={<NotificationSettings />} />
         <Route path="integrations" element={<IntegrationSettings />} />
         <Route path="security" element={<SecuritySettings />} />

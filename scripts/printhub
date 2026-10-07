@@ -17,6 +17,10 @@ BACKUP_DIR="$PRINTHUB_DIR/backups"
 SRC_DIR="$PRINTHUB_DIR/src"
 LOG_FILE="$PRINTHUB_DIR/printhub.log"
 CONTAINER="printhub"
+# Optional Spoolman (filament spools) next to PrintHub; version tested with this CLI.
+SPOOLMAN_IMAGE="ghcr.io/donkie/spoolman:0.27.0"
+SPOOLMAN_CONTAINER="printhub-spoolman"
+SPOOLMAN_DIR="$PRINTHUB_DIR/spoolman"
 CLI_PATH="/usr/local/bin/printhub"
 HEALTH_TIMEOUT=120
 
@@ -107,6 +111,8 @@ PORT="8080"
 MODE="image" # image = prebuilt from ghcr.io, source = build locally from git
 KEEP_BACKUPS="5"
 PINNED_VERSION=""
+SPOOLMAN="off"
+SPOOLMAN_PORT="7912"
 
 load_conf() {
   if [[ -f "$CONF_FILE" ]]; then
@@ -123,6 +129,8 @@ PORT="$PORT"
 MODE="$MODE"
 KEEP_BACKUPS="$KEEP_BACKUPS"
 PINNED_VERSION="$PINNED_VERSION"
+SPOOLMAN="$SPOOLMAN"
+SPOOLMAN_PORT="$SPOOLMAN_PORT"
 EOF
 }
 
@@ -205,8 +213,15 @@ running_version() {
   curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
 }
 
+host_ip() { hostname -I 2>/dev/null | awk '{print $1}'; }
+
 write_compose() {
-  local image=$1
+  local image=$1 spoolman_env=""
+  if [[ $SPOOLMAN == on ]]; then
+    spoolman_env="
+      SPOOLMAN_URL: http://spoolman:8000
+      SPOOLMAN_WEB_URL: http://$(host_ip || echo localhost):$SPOOLMAN_PORT"
+  fi
   cat >"$COMPOSE_FILE" <<EOF
 # Von 'printhub' erzeugt, wird bei Updates überschrieben. Eigene Einstellungen gehören in .env.
 services:
@@ -217,7 +232,7 @@ services:
     env_file: .env
     environment:
       DATA_DIR: /data
-      PORT: "8080"
+      PORT: "8080"$spoolman_env
     ports:
       - "$PORT:8080"
     volumes:
@@ -228,6 +243,34 @@ services:
         max-size: "10m"
         max-file: "3"
 EOF
+  if [[ $SPOOLMAN == on ]]; then
+    # Reachable in the LAN (Moonraker's [spoolman] needs it); Spoolman has no login, so
+    # do not forward this port through the reverse proxy.
+    cat >>"$COMPOSE_FILE" <<EOF
+  spoolman:
+    image: $SPOOLMAN_IMAGE
+    container_name: $SPOOLMAN_CONTAINER
+    restart: unless-stopped
+    environment:
+      TZ: $(cat /etc/timezone 2>/dev/null || echo Etc/UTC)
+      PUID: "1000"
+      PGID: "1000"
+    ports:
+      - "$SPOOLMAN_PORT:8000"
+    volumes:
+      - ./spoolman:/home/app/.local/share/spoolman
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+EOF
+  fi
+}
+
+ensure_spoolman_dir() {
+  mkdir -p "$SPOOLMAN_DIR"
+  chown 1000:1000 "$SPOOLMAN_DIR" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -323,7 +366,9 @@ create_backup() {
     was_running=1
     compose stop >/dev/null 2>&1 || true
   fi
-  tar -czf "$file" -C "$PRINTHUB_DIR" data .env printhub.conf
+  local parts=(data .env printhub.conf)
+  [[ -d "$SPOOLMAN_DIR" ]] && parts+=(spoolman)
+  tar -czf "$file" -C "$PRINTHUB_DIR" "${parts[@]}"
   chmod 600 "$file"
   if ((was_running)); then compose start >/dev/null 2>&1 || true; fi
   prune_backups
@@ -341,12 +386,19 @@ restore_backup_files() {
   [[ -f "$file" ]] || die "Backup nicht gefunden: $file"
   tar -tzf "$file" >/dev/null 2>&1 || die "Backup-Datei ist beschädigt: $file"
   compose down >/dev/null 2>&1 || true
-  local aside
-  aside="$PRINTHUB_DIR/data.before-restore-$(date +%Y%m%d-%H%M%S)"
+  local aside spool_aside="" stamp
+  stamp=$(date +%Y%m%d-%H%M%S)
+  aside="$PRINTHUB_DIR/data.before-restore-$stamp"
   [[ -d "$DATA_DIR" ]] && mv "$DATA_DIR" "$aside"
+  # Spoolman data only if the backup has it (older backups keep the current Spoolman data).
+  if tar -tzf "$file" spoolman >/dev/null 2>&1 && [[ -d "$SPOOLMAN_DIR" ]]; then
+    spool_aside="$PRINTHUB_DIR/spoolman.before-restore-$stamp"
+    mv "$SPOOLMAN_DIR" "$spool_aside"
+  fi
   tar -xzf "$file" -C "$PRINTHUB_DIR"
   chown -R 1000:1000 "$DATA_DIR" 2>/dev/null || true
-  rm -rf "$aside"
+  if [[ -d "$SPOOLMAN_DIR" ]]; then chown -R 1000:1000 "$SPOOLMAN_DIR" 2>/dev/null || true; fi
+  rm -rf "$aside" ${spool_aside:+"$spool_aside"}
 }
 
 # ---------------------------------------------------------------------------
@@ -354,7 +406,7 @@ restore_backup_files() {
 # ---------------------------------------------------------------------------
 
 cmd_install() {
-  local version="" public_url="${PRINTHUB_PUBLIC_URL:-}" proxies="${PRINTHUB_TRUSTED_PROXIES:-}" auto_update=""
+  local version="" public_url="${PRINTHUB_PUBLIC_URL:-}" proxies="${PRINTHUB_TRUSTED_PROXIES:-}" auto_update="" spoolman=""
   load_conf
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -366,11 +418,15 @@ cmd_install() {
       --trusted-proxies) proxies=$2; shift 2 ;;
       --auto-update) auto_update=y; shift ;;
       --no-auto-update) auto_update=n; shift ;;
+      --spoolman) spoolman=on; shift ;;
+      --no-spoolman) spoolman=off; shift ;;
+      --spoolman-port) SPOOLMAN_PORT=$2; shift 2 ;;
       -y | --yes) INTERACTIVE=0; shift ;;
       *) die "Unbekannte Option: $1" ;;
     esac
   done
   [[ $CHANNEL == stable || $CHANNEL == edge ]] || die "--channel muss 'stable' oder 'edge' sein."
+  [[ $SPOOLMAN_PORT =~ ^[0-9]+$ ]] || die "--spoolman-port muss eine Zahl sein."
   [[ $PORT =~ ^[0-9]+$ ]] || die "--port muss eine Zahl sein."
 
   printf '\n%sPrintHub Installation%s\n\n' "$C_BOLD" "$C_RESET"
@@ -387,6 +443,17 @@ cmd_install() {
     configure_env "$public_url" "$proxies"
   fi
   chown -R 1000:1000 "$DATA_DIR"
+  if [[ -z "$spoolman" && ! -f "$COMPOSE_FILE" ]]; then
+    # Only asked on a fresh install; later: printhub spoolman on|off.
+    if confirm "Spoolman (Verwaltung der Filamentspulen) mitinstallieren? Weboberfläche im LAN auf Port $SPOOLMAN_PORT" n; then spoolman=on; else spoolman=off; fi
+  fi
+  [[ -n "$spoolman" ]] && SPOOLMAN=$spoolman
+  if [[ $SPOOLMAN == on ]]; then
+    ensure_spoolman_dir
+    if [[ $(docker inspect -f '{{.State.Status}}' "$SPOOLMAN_CONTAINER" 2>/dev/null || echo missing) == missing ]] && have ss && ss -ltn "sport = :$SPOOLMAN_PORT" | grep -q LISTEN; then
+      die "Port $SPOOLMAN_PORT (Spoolman) ist bereits belegt. Anderen Port wählen: --spoolman-port 7913"
+    fi
+  fi
   save_conf
 
   local target tag ref image
@@ -488,13 +555,65 @@ print_summary() {
   else
     printf '  Adresse:      http://%s:%s\n' "${ip:-<server-ip>}" "$PORT"
   fi
+  if [[ $SPOOLMAN == on ]]; then
+    printf '  Spoolman:     http://%s:%s  (nur im LAN, kein Login: nicht über nginx freigeben)\n' "${ip:-<server-ip>}" "$SPOOLMAN_PORT"
+  fi
   printf '  Installation: %s\n\n' "$PRINTHUB_DIR"
   printf 'Nächste Schritte:\n'
   printf '  1. Adresse öffnen und das Admin-Konto anlegen, danach 2FA aktivieren.\n'
   printf '  2. In der moonraker.conf jedes Druckers unter [authorization] trusted_clients\n'
   printf '     die IP dieses Servers (%s) eintragen, oder in PrintHub einen API-Key hinterlegen.\n' "${ip:-<server-ip>}"
   [[ -n "$public_url" ]] && printf '  3. nginx-Konfiguration: https://github.com/%s#nginx-auf-dem-reverse-proxy-server\n' "$GITHUB_REPO"
+  if [[ $SPOOLMAN == on ]]; then spoolman_hint "${ip:-<server-ip>}"; fi
   printf '\nVerwaltung: %sprinthub help%s\n\n' "$C_BOLD" "$C_RESET"
+}
+
+spoolman_hint() {
+  printf '\nSpoolman ist in PrintHub bereits verbunden. Damit Moonraker den Verbrauch selbst bucht,\n'
+  printf 'optional in die moonraker.conf jedes Druckers eintragen:\n\n'
+  printf '  [spoolman]\n  server: http://%s:%s\n' "$1" "$SPOOLMAN_PORT"
+}
+
+cmd_spoolman() {
+  case "${1:-status}" in
+    status)
+      require_installed
+      load_conf
+      printf 'Spoolman: %s' "$SPOOLMAN"
+      if [[ $SPOOLMAN == on ]]; then
+        printf ' (http://%s:%s, %s)' "$(host_ip)" "$SPOOLMAN_PORT" "$(docker inspect -f '{{.State.Status}}' "$SPOOLMAN_CONTAINER" 2>/dev/null || echo fehlt)"
+      fi
+      printf '\n'
+      return 0
+      ;;
+    on | off) ;;
+    *) die "Verwendung: printhub spoolman on|off|status" ;;
+  esac
+  need_root
+  require_installed
+  load_conf
+  acquire_lock
+  if [[ $1 == on ]]; then
+    if [[ $SPOOLMAN != on ]] && have ss && ss -ltn "sport = :$SPOOLMAN_PORT" | grep -q LISTEN; then
+      die "Port $SPOOLMAN_PORT ist bereits belegt. Anderen Port in $CONF_FILE (SPOOLMAN_PORT) eintragen."
+    fi
+    ensure_spoolman_dir
+  fi
+  SPOOLMAN=$1
+  save_conf
+  local image
+  image=$(state_get current_image)
+  [[ -n "$image" ]] || die "Aktuelles PrintHub-Image unbekannt. Bitte 'printhub update' ausführen."
+  write_compose "$image"
+  info "Wende Änderung an…"
+  compose up -d --remove-orphans >>"$LOG_FILE" 2>&1
+  wait_healthy || die "PrintHub startet nicht. Details: printhub logs"
+  if [[ $SPOOLMAN == on ]]; then
+    ok "Spoolman läuft: http://$(host_ip):$SPOOLMAN_PORT (in PrintHub automatisch verbunden)."
+    spoolman_hint "$(host_ip)"
+  else
+    ok "Spoolman entfernt. Seine Daten bleiben in $SPOOLMAN_DIR (für ein späteres 'printhub spoolman on')."
+  fi
 }
 
 cmd_update() {
@@ -627,6 +746,11 @@ cmd_status() {
   printf '  Image:         %s\n' "$(state_get current_image)"
   printf '  Port:          %s\n' "$PORT"
   printf '  Verzeichnis:   %s\n' "$PRINTHUB_DIR"
+  if [[ $SPOOLMAN == on ]]; then
+    printf '  Spoolman:      %s (http://%s:%s)\n' "$(docker inspect -f '{{.State.Status}}' "$SPOOLMAN_CONTAINER" 2>/dev/null || echo fehlt)" "$(host_ip)" "$SPOOLMAN_PORT"
+  else
+    printf '  Spoolman:      aus (printhub spoolman on)\n'
+  fi
   printf '  Letztes Update: %s\n' "$(state_get updated_at || true)"
   if systemctl is-enabled printhub-update.timer >/dev/null 2>&1; then
     printf '  Auto-Update:   an (%s)\n' "$(systemctl show printhub-update.timer -p NextElapseUSecRealtime --value 2>/dev/null)"
@@ -767,6 +891,7 @@ Verwendung: printhub <befehl> [optionen]
   channel stable|edge     Update-Kanal: Releases oder Entwicklungsstand
   channel pin <version>   Auf eine Version festsetzen
   auto-update on|off      Tägliche automatische Updates
+  spoolman on|off|status  Spoolman (Filamentspulen) mitbetreiben; bei 'off' bleiben die Daten
   config                  Konfiguration (.env) bearbeiten und neu starten
   install [optionen]      (Neu-)Installation, siehe install.sh
   uninstall               PrintHub entfernen
@@ -791,6 +916,7 @@ main() {
     restore) cmd_restore "$@" ;;
     channel) cmd_channel "$@" ;;
     auto-update) cmd_auto_update "$@" ;;
+    spoolman) cmd_spoolman "$@" ;;
     config)
       require_installed
       load_conf

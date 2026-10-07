@@ -177,4 +177,33 @@ export const migrations: string[] = [
   -- Editing a job: the edited draft replaces the original when saved.
   ALTER TABLE jobs ADD COLUMN replaces INTEGER;
   `,
+  `
+  -- Phase 6: print history mirrored from Moonraker (statistics, costs), active Spoolman spool.
+  ALTER TABLE printers ADD COLUMN spool_id INTEGER;
+  CREATE TABLE prints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    printer_id INTEGER REFERENCES printers(id) ON DELETE SET NULL,
+    printer_name TEXT NOT NULL,
+    moonraker_job_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    status TEXT NOT NULL,
+    start_time INTEGER NOT NULL,
+    end_time INTEGER,
+    print_duration REAL NOT NULL,
+    total_duration REAL NOT NULL,
+    filament_mm REAL NOT NULL,
+    filament_g REAL,
+    material TEXT,
+    filament_name TEXT,
+    color TEXT,
+    job_id INTEGER,
+    spool_id INTEGER,
+    spool_name TEXT,
+    price_per_kg REAL,
+    price_source TEXT NOT NULL DEFAULT 'default',
+    synced_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX prints_moonraker_idx ON prints (printer_id, moonraker_job_id);
+  CREATE INDEX prints_start_idx ON prints (start_time);
+  `,
 ];

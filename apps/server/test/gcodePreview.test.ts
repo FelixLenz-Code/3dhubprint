@@ -38,6 +38,8 @@ describe('readToolpaths', () => {
     const f = write(['G90', 'M83', ';TYPE:Outer wall', 'G1 X100 Y100 Z0.2', 'G1 X120 Y100 E1', 'G1 X120 Y120 E1', ''].join('\n'));
     const bed = bedFromSettings({ printable_area: ['0x0', '220x0', '220x220', '0x220'], printable_height: '250' });
     expect(bed).toEqual({ bed: [[0, 0], [220, 0], [220, 220], [0, 220]], height: 250 });
+    // Some vendor profiles keep the area as one string.
+    expect(bedFromSettings({ printable_area: '0x0,300x0,300x300,0x300' }).bed).toEqual([[0, 0], [300, 0], [300, 300], [0, 300]]);
     const p = await renderPlatePreview(f, bed, [32]);
     expect(p.segments).toBe(2);
     for (const png of [p.top, p.iso, p.thumbnails.get(32)!]) expect(png.subarray(1, 4).toString()).toBe('PNG');

@@ -60,6 +60,8 @@ export const printers = sqliteTable('printers', {
   bedClear: integer('bed_clear', { mode: 'boolean' }).notNull().default(false),
   /** Orca bed type (curr_bed_type) used for slicing; null = machine default. */
   bedType: text('bed_type'),
+  /** Active Spoolman spool, when Moonraker does not track it itself. */
+  spoolId: integer('spool_id'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 });
@@ -212,3 +214,35 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
   createdAt: integer('created_at').notNull(),
   lastSuccessAt: integer('last_success_at'),
 });
+
+/** Print history mirrored from Moonraker, for statistics and costs (also prints started elsewhere). */
+export const prints = sqliteTable(
+  'prints',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    printerId: integer('printer_id').references(() => printers.id, { onDelete: 'set null' }),
+    /** Kept when the printer is removed. */
+    printerName: text('printer_name').notNull(),
+    moonrakerJobId: text('moonraker_job_id').notNull(),
+    filename: text('filename').notNull(),
+    status: text('status').notNull(),
+    /** Unix ms */
+    startTime: integer('start_time').notNull(),
+    endTime: integer('end_time'),
+    printDuration: real('print_duration').notNull(),
+    totalDuration: real('total_duration').notNull(),
+    filamentMm: real('filament_mm').notNull(),
+    filamentG: real('filament_g'),
+    material: text('material'),
+    filamentName: text('filament_name'),
+    color: text('color'),
+    jobId: integer('job_id'),
+    spoolId: integer('spool_id'),
+    spoolName: text('spool_name'),
+    /** Snapshot of the material price at print time; null = default price from the settings. */
+    pricePerKg: real('price_per_kg'),
+    priceSource: text('price_source', { enum: ['spool', 'profile', 'default'] }).notNull().default('default'),
+    syncedAt: integer('synced_at').notNull(),
+  },
+  (t) => [uniqueIndex('prints_moonraker_idx').on(t.printerId, t.moonrakerJobId), index('prints_start_idx').on(t.startTime)],
+);

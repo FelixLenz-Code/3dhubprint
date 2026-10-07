@@ -5,3 +5,4 @@ export * from './control.js';
 export * from './slicing.js';
 export * from './notifications.js';
 export * from './thingiverse.js';
+export * from './stats.js';

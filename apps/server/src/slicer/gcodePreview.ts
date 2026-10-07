@@ -461,9 +461,16 @@ function renderIso(seg: Segments, zMax: number, b: { minX: number; maxX: number;
   return c;
 }
 
+/** Orca's printable_area points; some vendor profiles store them as one comma-separated string. */
+export function printableArea(machine: Record<string, unknown>): string[] {
+  const a = machine.printable_area;
+  if (Array.isArray(a)) return a.map(String);
+  return typeof a === 'string' ? a.split(',').map((p) => p.trim()).filter(Boolean) : [];
+}
+
 /** Bed polygon from Orca's printable_area. */
 export function bedFromSettings(machine: Record<string, unknown>): PlateGeometry {
-  const area = Array.isArray(machine.printable_area) ? (machine.printable_area as string[]) : [];
+  const area = printableArea(machine);
   const bed = area.map((p) => p.split('x').map(Number) as [number, number]).filter((p) => p.every(Number.isFinite));
   const height = Number(Array.isArray(machine.printable_height) ? machine.printable_height[0] : machine.printable_height);
   return { bed: bed.length >= 3 ? bed : [[0, 0], [220, 0], [220, 220], [0, 220]], height: Number.isFinite(height) ? height : 250 };

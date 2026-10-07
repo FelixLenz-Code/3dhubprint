@@ -76,7 +76,7 @@ export async function controlRoutes(app: FastifyInstance, { manager, auth }: { m
 
   app.post('/:id/fan', (req) => {
     const b = fanSchema.parse(req.body);
-    return run(req, 'fan', (c) => c.fan(b.percent));
+    return run(req, 'fan', (c) => c.fan(b.percent, b.fan));
   });
 
   app.post('/:id/macro', (req) => {

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { unzipSync, strFromU8 } from 'fflate';
 import { BED_TYPES, type SliceOverrides } from '@printhub/shared';
+import { printableArea } from './gcodePreview.js';
 
 export type ProfileKind = 'machine' | 'process' | 'filament';
 type Json = Record<string, unknown>;
@@ -207,7 +208,7 @@ export type ProfileSummary = Record<string, string | number | boolean | undefine
 /** The handful of values worth showing in lists. */
 export function summarize(kind: ProfileKind, s: Json): ProfileSummary {
   if (kind === 'machine') {
-    const area = (Array.isArray(s.printable_area) ? s.printable_area : []) as string[];
+    const area = printableArea(s);
     const xs = area.map((p) => Number(p.split('x')[0]));
     const ys = area.map((p) => Number(p.split('x')[1]));
     return {
