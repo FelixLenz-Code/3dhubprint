@@ -14,6 +14,7 @@ import type { SecretBox } from '../crypto.js';
 import type { PrinterManager } from '../printers/manager.js';
 import type { PrintEvent } from '../printers/events.js';
 import type { SlicingService } from '../slicer/service.js';
+import type { BedCheckService } from '../bedcheck/service.js';
 
 const MAX_FAILURES = 5;
 
@@ -140,6 +141,20 @@ export class NotificationService {
       }),
     );
     return sent;
+  }
+
+  /** Camera found the bed empty: asks for confirmation, or reports that it released the bed. */
+  attachBedCheck(manager: PrinterManager, bedCheck: BedCheckService) {
+    bedCheck.onSuggest = (printerId, auto, waiting) => {
+      const next = waiting ? ` Der nächste Auftrag ${auto ? 'startet' : 'startet danach'} (${waiting} in der Warteschlange).` : '';
+      const name = manager.name(printerId);
+      void this.send(
+        'bed_check',
+        auto
+          ? { title: `🟢 ${name}: Druckbett frei erkannt`, body: `Die Kamera sieht ein leeres Bett und hat es freigegeben.${next}`, url: `/printers/${printerId}`, tag: `printer-${printerId}` }
+          : { title: `📷 ${name}: Druckbett frei?`, body: `Die Kamera sieht ein leeres Bett. Bitte kurz bestätigen.${next}`, url: `/printers/${printerId}`, tag: `printer-${printerId}` },
+      ).catch((err) => this.log.error({ err }, 'push dispatch failed'));
+    };
   }
 
   /** Translates printer and job events into notifications. */

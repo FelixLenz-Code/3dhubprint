@@ -5,6 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { assignmentSchema, bedClearSchema, createJobSchema, moveJobSchema, sendJobSchema } from '@printhub/shared';
+import type { BedCheckService } from '../bedcheck/service.js';
 import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
 import { SlicingError, type SlicingService } from './service.js';
@@ -14,7 +15,13 @@ const kindSchema = z.enum(['machine', 'process', 'filament']);
 
 export async function slicerRoutes(
   app: FastifyInstance,
-  { slicing, auth, tmpDir, maxModelBytes }: { slicing: SlicingService; auth: AuthService; tmpDir: string; maxModelBytes: number },
+  {
+    slicing,
+    auth,
+    tmpDir,
+    maxModelBytes,
+    bedCheck,
+  }: { slicing: SlicingService; auth: AuthService; tmpDir: string; maxModelBytes: number; bedCheck?: BedCheckService },
 ) {
   app.addHook('preHandler', app.requireAuth);
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -193,6 +200,9 @@ export async function slicerRoutes(
     admin.post('/printers/:id/bed-clear', async (req) => {
       const { id } = idParams.parse(req.params);
       const { start } = bedClearSchema.parse(req.body ?? {});
+      // Before the next print moves the bed: the camera image is another example of an empty bed
+      // (this is also how a false "occupied" from the camera gets overruled and corrected).
+      await bedCheck?.learn(id);
       const started = await slicing.confirmBedClear(id, start);
       audit(req, 'printer.bed_clear', `#${id}${started ? ` start #${started.id}` : ''}`);
       return { ok: true, started: started ?? null };

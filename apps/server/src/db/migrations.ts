@@ -206,4 +206,15 @@ export const migrations: string[] = [
   CREATE UNIQUE INDEX prints_moonraker_idx ON prints (printer_id, moonraker_job_id);
   CREATE INDEX prints_start_idx ON prints (start_time);
   `,
+  `
+  -- Camera check whether the bed is empty: settings per printer, images of the empty bed.
+  ALTER TABLE printers ADD COLUMN bed_check TEXT;
+  CREATE TABLE bed_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    printer_id INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    source TEXT NOT NULL
+  );
+  CREATE INDEX bed_references_printer_idx ON bed_references (printer_id);
+  `,
 ];

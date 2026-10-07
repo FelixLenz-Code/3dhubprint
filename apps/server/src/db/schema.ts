@@ -62,6 +62,8 @@ export const printers = sqliteTable('printers', {
   bedType: text('bed_type'),
   /** Active Spoolman spool, when Moonraker does not track it itself. */
   spoolId: integer('spool_id'),
+  /** JSON BedCheckSettings; null = off. */
+  bedCheck: text('bed_check'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 });
@@ -246,3 +248,12 @@ export const prints = sqliteTable(
   },
   (t) => [uniqueIndex('prints_moonraker_idx').on(t.printerId, t.moonrakerJobId), index('prints_start_idx').on(t.startTime)],
 );
+
+export const bedReferences = sqliteTable('bed_references', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  printerId: integer('printer_id')
+    .notNull()
+    .references(() => printers.id, { onDelete: 'cascade' }),
+  createdAt: integer('created_at').notNull(),
+  source: text('source', { enum: ['manual', 'confirmed'] }).notNull(),
+});

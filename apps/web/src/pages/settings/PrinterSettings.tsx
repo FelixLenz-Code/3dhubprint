@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
-import { Pencil, Plus, Trash2, Plug } from 'lucide-react';
+import { Pencil, Plus, Trash2, Plug, ScanSearch } from 'lucide-react';
+import { BED_CHECK_MODES } from '@printhub/shared';
+import { BedCheckDialog } from '../../components/printer/BedCheckDialog';
 import type { PrinterSummary } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { useLive } from '../../lib/live';
@@ -11,6 +13,8 @@ type TestResult = { ok: true; moonrakerVersion: string; klippyState: string } | 
 export function PrinterSettings() {
   const printers = useLive((s) => s.printers);
   const [editing, setEditing] = useState<PrinterSummary | 'new' | null>(null);
+  const [bedCheck, setBedCheck] = useState<number>();
+  const bedCheckPrinter = printers.find((p) => p.id === bedCheck);
 
   return (
     <div className="space-y-4">
@@ -38,8 +42,12 @@ export function PrinterSettings() {
                 <div className="break-all text-xs text-text-3">
                   {p.url}
                   {p.hasApiKey && ' · API-Key hinterlegt'}
+                  {p.bedCheck && ` · Bett-Erkennung: ${BED_CHECK_MODES[p.bedCheck.mode]}${p.bedCheck.ready ? '' : ' (nicht eingerichtet)'}`}
                 </div>
               </div>
+              <Button variant="ghost" onClick={() => setBedCheck(p.id)} aria-label={`Bett-Erkennung für ${p.name}`} title="Bett-Erkennung per Kamera">
+                <ScanSearch className="size-4" />
+              </Button>
               <Button variant="ghost" onClick={() => setEditing(p)} aria-label={`${p.name} bearbeiten`}>
                 <Pencil className="size-4" />
               </Button>
@@ -48,6 +56,7 @@ export function PrinterSettings() {
           );
         })}
       </Card>
+      {bedCheckPrinter && <BedCheckDialog printer={bedCheckPrinter} open onClose={() => setBedCheck(undefined)} />}
     </div>
   );
 }

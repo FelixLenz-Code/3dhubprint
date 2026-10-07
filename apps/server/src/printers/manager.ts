@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
-import type { ConsoleLine, PrinterInput, PrinterStatus, PrinterSummary, TempSample, Webcam } from '@printhub/shared';
+import type { BedCheckState, ConsoleLine, PrinterInput, PrinterStatus, PrinterSummary, TempSample, Webcam } from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { printers } from '../db/schema.js';
 import type { SecretBox } from '../crypto.js';
@@ -31,6 +31,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
   private clients = new Map<number, MoonrakerClient>();
   private rows = new Map<number, PrinterRow>();
   private consoles = new Map<number, ConsoleLine[]>();
+  private bedChecks = new Map<number, BedCheckState>();
   private tracker = new PrintEventTracker((e) => this.onPrintEvent(e));
   private sampleTimer?: NodeJS.Timeout;
 
@@ -129,6 +130,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
       status: client ? client.status : { connection: 'disabled' },
       capabilities: client?.capabilities,
       bedClear: row.bedClear,
+      bedCheck: this.bedChecks.get(row.id),
     };
   }
 
@@ -149,6 +151,15 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
   }
 
   /** Active spool remembered by PrintHub (printers without Moonraker's Spoolman integration). */
+  /** Camera check state shown with the printer (undefined = off). */
+  setBedCheckState(id: number, state: BedCheckState | undefined) {
+    if (!this.rows.has(id)) return;
+    if (JSON.stringify(this.bedChecks.get(id)) === JSON.stringify(state)) return;
+    if (state) this.bedChecks.set(id, state);
+    else this.bedChecks.delete(id);
+    this.emit('changed');
+  }
+
   spoolId(id: number): number | null {
     return this.rows.get(id)?.spoolId ?? null;
   }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PrinterCapabilities } from './control.js';
+import type { BedCheckState } from './bedcheck.js';
 
 export const printerInputSchema = z.object({
   name: z.string().trim().min(1).max(64),
@@ -93,6 +94,8 @@ export interface PrinterSummary {
   capabilities?: PrinterCapabilities;
   /** The bed was confirmed empty after the last print. */
   bedClear: boolean;
+  /** Camera check of the bed (absent when off). */
+  bedCheck?: BedCheckState;
 }
 
 export interface FileMetadata {

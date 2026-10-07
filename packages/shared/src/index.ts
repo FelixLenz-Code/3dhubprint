@@ -6,3 +6,4 @@ export * from './slicing.js';
 export * from './notifications.js';
 export * from './thingiverse.js';
 export * from './stats.js';
+export * from './bedcheck.js';

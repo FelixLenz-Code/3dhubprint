@@ -75,6 +75,30 @@ der Bestätigung „Bett frei – starten“ beginnt der nächste Auftrag. Ist d
 bestätigt und der Drucker untätig, startet ein neu eingereihter Auftrag sofort. PrintHub verfolgt
 gestartete Aufträge bis zum Ende (gedruckt, abgebrochen, fehlgeschlagen).
 
+### Bett-Erkennung per Kamera
+
+Optional prüft PrintHub über die Druckerkamera, ob das Bett leer ist (Einstellungen → Drucker →
+Lupen-Symbol). Pro Drucker wählbar:
+
+- **Nachfragen:** Sieht die Kamera ein leeres Bett, fragt der Banner (und eine Push-Nachricht)
+  „Stimmt das?“. Erst nach „Ja“ startet der nächste Auftrag.
+- **Automatisch:** Nach zwei eindeutigen „frei“-Ergebnissen hintereinander gibt PrintHub das Bett
+  ohne Rückfrage frei. Ein unsicheres Ergebnis gibt nie frei.
+
+Eingerichtet wird die Erkennung so:
+
+1. Im Kamerabild einen Rahmen um die Druckfläche ziehen.
+2. Mindestens ein Bild des leeren Betts speichern, am besten in der Position nach einem Druck.
+
+PrintHub vergleicht den markierten Bereich mit diesen Bildern. Dabei zählen Farbe und Helligkeit;
+Änderungen der Raumbeleuchtung werden herausgerechnet. Geprüft wird nach jedem Druck und dann
+minütlich, solange das Bett als belegt gilt. Alles läuft lokal, ohne KI-Modell und ohne Cloud.
+
+Die Kamera kann sich irren. Meldet sie fälschlich ein belegtes Bett, übergeht **„Trotzdem frei“**
+die Warnung. Jedes von Hand bestätigte leere Bett merkt sich PrintHub als weiteres Vergleichsbild
+(bis zu 10), so lernt die Erkennung typische Schatten und Positionen. Flache, sehr kleine oder
+bettfarbene Reste kann die Kamera übersehen; „Nachfragen“ ist deshalb die sichere Wahl.
+
 ## Statistik & Kosten
 
 PrintHub liest den Druckverlauf jedes Druckers aus Moonraker ein (beim Verbinden, nach jedem

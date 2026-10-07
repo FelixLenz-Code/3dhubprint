@@ -7,9 +7,10 @@ export const NOTIFICATION_EVENTS = {
   printer_error: 'Klipper-Fehler / Drucker offline während eines Drucks',
   slice_failed: 'Slicen fehlgeschlagen',
   slice_done: 'Slicen fertig',
+  bed_check: 'Kamera: Druckbett frei erkannt',
 } as const;
 export type NotificationEvent = keyof typeof NOTIFICATION_EVENTS;
-export const DEFAULT_NOTIFICATION_EVENTS: NotificationEvent[] = ['print_done', 'print_error', 'print_paused', 'printer_error', 'slice_failed'];
+export const DEFAULT_NOTIFICATION_EVENTS: NotificationEvent[] = ['print_done', 'print_error', 'print_paused', 'printer_error', 'slice_failed', 'bed_check'];
 
 const eventSchema = z.enum(Object.keys(NOTIFICATION_EVENTS) as [NotificationEvent, ...NotificationEvent[]]);
 
