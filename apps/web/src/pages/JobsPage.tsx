@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, ClipboardList, Download, FileText, ListPlus, ListX, Pencil, Play, Plus, RotateCw, Send, Trash2 } from 'lucide-react';
-import type { JobInfo, SlicerStatus } from '@printhub/shared';
+import clsx from 'clsx';
+import { ArrowDown, ArrowUp, CheckSquare, ClipboardList, Download, FileText, ListPlus, ListX, Pencil, Play, Plus, RotateCw, Send, Trash2 } from 'lucide-react';
+import type { JobInfo, JobStatus, SlicerStatus } from '@printhub/shared';
 import { api } from '../lib/api';
 import { useIsAdmin } from '../lib/auth';
-import { confirm, useAction } from '../lib/feedback';
+import { confirm, toast, useAction } from '../lib/feedback';
+import { confirmPrintStart } from '../lib/printStart';
 import { formatDuration, formatFilament, isActivePrint } from '../lib/format';
 import { JOB_STATUS, PRINTABLE, formatDims, jobTitle, queueOf, useJobs } from '../lib/jobs';
 import { useLive } from '../lib/live';
@@ -14,10 +16,53 @@ import { describeOverrides } from '../components/slicing/SliceOptions';
 import { PlatePreview } from '../components/slicing/PlatePreview';
 import { Modal } from '../components/Modal';
 
+/** Jobs that are over: printed, failed or cancelled. */
+const FINISHED: JobStatus[] = ['done', 'print_failed', 'print_cancelled', 'failed', 'cancelled'];
+
+/** Selection for deleting several jobs at once; undefined = not selecting. */
+export interface Selection {
+  ids: Set<number>;
+  toggle: (id: number) => void;
+}
+
 export function JobsPage() {
   const jobs = useJobs();
   const isAdmin = useIsAdmin();
   const status = useQuery({ queryKey: ['slicer-status'], queryFn: () => api<SlicerStatus>('/slicer/status') });
+  const [selected, setSelected] = useState<Set<number>>();
+  const { busy, run } = useAction();
+  // Jobs that went away (deleted elsewhere) drop out of the selection.
+  const ids = selected && jobs ? new Set([...selected].filter((id) => jobs.some((j) => j.id === id))) : selected;
+  const selection: Selection | undefined = ids && {
+    ids,
+    toggle: (id) => {
+      const next = new Set(ids);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setSelected(next);
+    },
+  };
+
+  const deleteSelected = async () => {
+    if (!ids?.size) return;
+    const n = ids.size;
+    const affectsQueue = jobs?.some((j) => ids.has(j.id) && (j.status === 'waiting' || j.status === 'slicing'));
+    if (
+      !(await confirm({
+        title: `${n} ${n === 1 ? 'Auftrag' : 'Aufträge'} löschen?`,
+        body: `Die geslicten G-Codes in PrintHub werden gelöscht (nicht auf den Druckern).${affectsQueue ? ' Laufendes Slicen wird abgebrochen, wartende Aufträge verlassen die Warteschlange.' : ''}`,
+        confirmLabel: 'Löschen',
+        danger: true,
+      }))
+    )
+      return;
+    await run('bulk', async () => {
+      const r = await api<{ deleted: number[]; skipped: { id: number; reason: string }[] }>('/jobs/delete', { body: { ids: [...ids] } });
+      if (r.skipped.length) toast(`${r.deleted.length} gelöscht, ${r.skipped.length} übersprungen: ${r.skipped[0]!.reason}`, 'critical');
+      else toast(`${r.deleted.length} ${r.deleted.length === 1 ? 'Auftrag' : 'Aufträge'} gelöscht`);
+      setSelected(undefined);
+    });
+  };
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -27,13 +72,44 @@ export function JobsPage() {
           <p className="text-sm text-text-2">Modelle slicen und an die Drucker senden</p>
         </div>
         {isAdmin && (
-          <Link to="/jobs/new">
-            <Button>
-              <Plus className="size-4" /> Neuer Auftrag
-            </Button>
-          </Link>
+          <div className="flex gap-2">
+            {!!jobs?.length && !selection && (
+              <Button variant="secondary" onClick={() => setSelected(new Set())}>
+                <CheckSquare className="size-4" /> Auswählen
+              </Button>
+            )}
+            <Link to="/jobs/new">
+              <Button>
+                <Plus className="size-4" /> Neuer Auftrag
+              </Button>
+            </Link>
+          </div>
         )}
       </header>
+
+      {selection && jobs && (
+        <Card className="sticky top-2 z-10 flex flex-wrap items-center gap-2 p-3 shadow-lg">
+          <span className="mr-auto text-sm font-medium">
+            {selection.ids.size} {selection.ids.size === 1 ? 'Auftrag' : 'Aufträge'} ausgewählt
+          </span>
+          <Button variant="ghost" className="min-h-9 px-3" onClick={() => setSelected(new Set(jobs.filter((j) => FINISHED.includes(j.status)).map((j) => j.id)))}>
+            Abgeschlossene
+          </Button>
+          <Button
+            variant="ghost"
+            className="min-h-9 px-3"
+            onClick={() => setSelected(selection.ids.size === jobs.length ? new Set() : new Set(jobs.map((j) => j.id)))}
+          >
+            {selection.ids.size === jobs.length ? 'Keine' : 'Alle'}
+          </Button>
+          <Button variant="secondary" className="min-h-9 px-3" onClick={() => setSelected(undefined)}>
+            Fertig
+          </Button>
+          <Button variant="danger" className="min-h-9 px-3" onClick={deleteSelected} loading={busy === 'bulk'} disabled={!selection.ids.size}>
+            <Trash2 className="size-4" /> Löschen
+          </Button>
+        </Card>
+      )}
 
       {status.data && !status.data.available && (
         <Alert tone="warning">Slicen ist nicht möglich: {status.data.reason}. In der Docker-Installation ist OrcaSlicer enthalten.</Alert>
@@ -60,7 +136,7 @@ export function JobsPage() {
         </Card>
       ) : (
         <>
-          <Queues jobs={jobs} editable={isAdmin} />
+          <Queues jobs={jobs} editable={isAdmin} selection={selection} />
           {jobs.some((j) => j.status !== 'waiting') && (
             <section className="space-y-2">
               <h2 className="text-sm font-medium text-text-2">Alle Aufträge</h2>
@@ -68,7 +144,7 @@ export function JobsPage() {
                 {jobs
                   .filter((j) => j.status !== 'waiting')
                   .map((j) => (
-                    <JobRow key={j.id} job={j} editable={isAdmin} />
+                    <JobRow key={j.id} job={j} editable={isAdmin} selection={selection} />
                   ))}
               </Card>
             </section>
@@ -80,7 +156,7 @@ export function JobsPage() {
 }
 
 /** One block per printer with its waiting jobs in order. */
-function Queues({ jobs, editable }: { jobs: JobInfo[]; editable: boolean }) {
+function Queues({ jobs, editable, selection }: { jobs: JobInfo[]; editable: boolean; selection?: Selection }) {
   const printers = useLive((s) => s.printers);
   const withQueue = printers.map((p) => ({ printer: p, queue: queueOf(jobs, p.id) })).filter((x) => x.queue.length);
   if (!withQueue.length) return null;
@@ -100,7 +176,7 @@ function Queues({ jobs, editable }: { jobs: JobInfo[]; editable: boolean }) {
           </h2>
           <Card className="divide-y divide-border overflow-hidden">
             {queue.map((j, i) => (
-              <JobRow key={j.id} job={j} editable={editable} first={i === 0} last={i === queue.length - 1} />
+              <JobRow key={j.id} job={j} editable={editable} first={i === 0} last={i === queue.length - 1} selection={selection} />
             ))}
           </Card>
         </section>
@@ -109,7 +185,19 @@ function Queues({ jobs, editable }: { jobs: JobInfo[]; editable: boolean }) {
   );
 }
 
-function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolean; first?: boolean; last?: boolean }) {
+function JobRow({
+  job,
+  editable,
+  first,
+  last,
+  selection,
+}: {
+  job: JobInfo;
+  editable: boolean;
+  first?: boolean;
+  last?: boolean;
+  selection?: Selection;
+}) {
   const { busy, run } = useAction();
   const [log, setLog] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -123,15 +211,15 @@ function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolea
   const send = async (print: boolean) => {
     if (
       print &&
-      !(await confirm({
+      (!printer ||
+        !(await confirmPrintStart(printer, {
         title: job.status === 'done' ? 'Erneut drucken?' : 'Druck starten?',
         body: (
           <>
             „{jobTitle(job)}“ wird an <b>{job.printer?.name}</b> gesendet und sofort gedruckt. Ist das Druckbett frei und sauber?
           </>
         ),
-        confirmLabel: 'Drucken',
-      }))
+        })))
     )
       return;
     await run(print ? 'print' : 'send', () => api(`/jobs/${job.id}/send`, { body: { print } }), print ? 'Druck gestartet' : 'An den Drucker übertragen');
@@ -156,8 +244,19 @@ function JobRow({ job, editable, first, last }: { job: JobInfo; editable: boolea
   };
 
   return (
-    <div className="space-y-3 p-4">
+    <div className={clsx('space-y-3 p-4', selection?.ids.has(job.id) && 'bg-accent/5')}>
       <div className="flex gap-4">
+        {selection && (
+          <label className="-my-1 -ml-1 flex shrink-0 cursor-pointer items-center self-stretch px-1">
+            <input
+              type="checkbox"
+              checked={selection.ids.has(job.id)}
+              onChange={() => selection.toggle(job.id)}
+              className="size-5 accent-[var(--accent)]"
+              aria-label={`${jobTitle(job)} auswählen`}
+            />
+          </label>
+        )}
         <button
           type="button"
           className="relative shrink-0 disabled:cursor-default"

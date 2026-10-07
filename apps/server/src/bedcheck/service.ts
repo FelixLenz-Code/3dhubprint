@@ -65,6 +65,8 @@ export class BedCheckService {
   private readonly dir: string;
   /** Push messages; wired by the notification service. */
   onSuggest?: (printerId: number, auto: boolean, waiting: number) => void;
+  /** A queued job was held back because the camera did not see an empty bed. */
+  onBlocked?: (printerId: number, result: BedCheckResult) => void;
 
   constructor(
     private readonly db: Db,
@@ -197,6 +199,23 @@ export class BedCheckService {
       c.running = false;
       c.nextAt = Date.now() + CHECK_INTERVAL_MS;
     }
+  }
+
+  /**
+   * Fresh look right before a queued print starts. Without a set-up check (off, no region or
+   * reference) the start goes ahead; otherwise only a clear result lets it start.
+   */
+  async allowsStart(printerId: number): Promise<boolean> {
+    const s = this.settings(printerId);
+    if (s.mode === 'off' || !s.region || !this.references(printerId).length) return true;
+    // A routine check may be under way; wait for it so this one uses a fresh image.
+    const c = this.check(printerId);
+    for (let i = 0; c.running && i < 100; i++) await new Promise((r) => setTimeout(r, 100));
+    const result = await this.run(printerId);
+    if (result.verdict === 'clear') return true;
+    this.log.info({ printer: printerId, verdict: result.verdict, error: result.error }, 'bed check: queued start held back');
+    this.onBlocked?.(printerId, result);
+    return false;
   }
 
   overlay(printerId: number): Buffer | undefined {

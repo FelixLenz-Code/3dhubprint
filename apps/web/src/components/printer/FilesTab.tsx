@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import type { DirectoryListing, FileEntry, PrinterSummary } from '@printhub/shared';
 import { api, uploadWithProgress } from '../../lib/api';
 import { confirm, toast, useAction } from '../../lib/feedback';
+import { confirmPrintStart } from '../../lib/printStart';
 import { fileLabel, formatDuration, formatFilament, isActivePrint } from '../../lib/format';
 import { formatBytes, formatDate, thumbUrl } from '../../lib/files';
 import { Button, Card, Input, ProgressBar, Spinner } from '../ui';
@@ -93,14 +94,13 @@ function FileRow({ printer, file, editable, onChanged }: { printer: PrinterSumma
 
   const print = async () => {
     if (
-      await confirm({
+      await confirmPrintStart(printer, {
         title: 'Druck starten?',
         body: (
           <>
             „{fileLabel(file.name)}“ auf <b>{printer.name}</b> drucken. Ist das Druckbett frei und sauber?
           </>
         ),
-        confirmLabel: 'Drucken',
       })
     )
       void run('print', () => api(`/printers/${printer.id}/files/print`, { body: { path: file.path } }), 'Druck gestartet');
@@ -160,9 +160,17 @@ function UploadZone({ printer, dir, onDone }: { printer: PrinterSummary; dir: st
     if (printAfter && isActivePrint(printer.status)) {
       toast('Es läuft bereits ein Druck; Datei wird nur hochgeladen.', 'critical');
     }
+    const print =
+      printAfter &&
+      !isActivePrint(printer.status) &&
+      (await confirmPrintStart(printer, {
+        title: 'Nach dem Hochladen drucken?',
+        body: <>„{fileLabel(file.name)}“ wird nach dem Hochladen gedruckt. Abbrechen lädt die Datei nur hoch.</>,
+        onlyWithCamera: true,
+      }));
     const form = new FormData();
     if (dir) form.append('path', dir);
-    if (printAfter && !isActivePrint(printer.status)) form.append('print', 'true');
+    if (print) form.append('print', 'true');
     form.append('file', file, file.name);
     setProgress({ name: file.name, value: 0 });
     try {

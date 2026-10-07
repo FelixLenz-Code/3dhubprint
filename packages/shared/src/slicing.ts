@@ -95,8 +95,32 @@ export type JobStatus =
 /**
  * Per-job changes on top of the process profile. Omitted sections keep the profile's values.
  */
+/** OrcaSlicer sparse_infill_pattern values and their German names. */
+export const INFILL_PATTERNS = {
+  grid: 'Gitter',
+  gyroid: 'Gyroid',
+  cubic: 'Kubisch',
+  adaptivecubic: 'Adaptiv kubisch',
+  crosshatch: 'Kreuzschraffur',
+  honeycomb: 'Waben',
+  '3dhoneycomb': '3D-Waben',
+  triangles: 'Dreiecke',
+  'tri-hexagon': 'Tri-Hexagon',
+  rectilinear: 'Rechteckig',
+  line: 'Linien',
+  lightning: 'Blitz',
+} as const;
+export type InfillPattern = keyof typeof INFILL_PATTERNS;
+
 export const sliceOverridesSchema = z
   .object({
+    infill: z
+      .object({
+        /** Percent. */
+        density: z.number().min(0).max(100),
+        pattern: z.enum(Object.keys(INFILL_PATTERNS) as [InfillPattern, ...InfillPattern[]]).optional(),
+      })
+      .optional(),
     support: z
       .object({
         enabled: z.boolean(),
@@ -192,6 +216,10 @@ export const bedClearSchema = z.object({
 });
 
 export const MAX_PLATE_OBJECTS = 100;
+
+export const deleteJobsSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500),
+});
 
 export const createJobSchema = z
   .object({

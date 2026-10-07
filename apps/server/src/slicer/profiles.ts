@@ -264,6 +264,10 @@ const BRIM_FROM_ORCA: Record<string, keyof typeof BRIM_TO_ORCA> = Object.fromEnt
 export function applyOverrides(process: Json, o: SliceOverrides): Json {
   const s: Json = { ...process };
   const bool = (b: boolean) => (b ? '1' : '0');
+  if (o.infill) {
+    s.sparse_infill_density = `${o.infill.density}%`;
+    if (o.infill.pattern) s.sparse_infill_pattern = o.infill.pattern;
+  }
   if (o.support) {
     s.enable_support = bool(o.support.enabled);
     s.support_type = o.support.type === 'tree' ? 'tree(auto)' : 'normal(auto)';

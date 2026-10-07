@@ -252,7 +252,12 @@ describe('models and jobs', () => {
         printerId,
         process: 'Tuned (Claude) - 0.20mm Standard',
         filament: 'Tuned (Claude) - PLA',
-        overrides: { support: { enabled: true, type: 'tree', buildPlateOnly: true }, brim: { type: 'outer', width: 8 }, skirt: { loops: 2 } },
+        overrides: {
+          support: { enabled: true, type: 'tree', buildPlateOnly: true },
+          brim: { type: 'outer', width: 8 },
+          skirt: { loops: 2 },
+          infill: { density: 35, pattern: 'gyroid' },
+        },
       },
     });
     expect(r.status).toBe(201);
@@ -271,6 +276,8 @@ describe('models and jobs', () => {
     expect(gcode).toContain('; brim_type = outer_only');
     expect(gcode).toContain('; brim_width = 8');
     expect(gcode).toContain('; skirt_loops = 2');
+    expect(gcode).toContain('; sparse_infill_density = 35%');
+    expect(gcode).toContain('; sparse_infill_pattern = gyroid');
   });
 
   it('enables vase mode with the settings Orca requires, for a single object only', async () => {
@@ -417,5 +424,18 @@ describe('models and jobs', () => {
 
   it('protects models that are still used by jobs', async () => {
     expect((await api(`/api/models/${modelId}`, { method: 'DELETE' })).status).toBe(409);
+  });
+
+  it('deletes several jobs at once and reports the ones it could not', async () => {
+    const before = (await api('/api/jobs')).body as JobInfo[];
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    const ids = before.slice(0, 2).map((j) => j.id);
+    const r = await api('/api/jobs/delete', { body: { ids: [...ids, 999999] } });
+    expect(r.status).toBe(200);
+    expect(r.body.deleted).toEqual(ids);
+    expect(r.body.skipped).toEqual([{ id: 999999, reason: 'Auftrag nicht gefunden' }]);
+    const after = ((await api('/api/jobs')).body as JobInfo[]).map((j) => j.id);
+    for (const id of ids) expect(after).not.toContain(id);
+    expect((await api('/api/jobs/delete', { body: { ids: [] } })).status).toBe(400);
   });
 });

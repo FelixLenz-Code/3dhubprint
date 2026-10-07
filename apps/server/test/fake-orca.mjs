@@ -46,6 +46,7 @@ const gcode = [
   `; spiral_mode = ${proc.spiral_mode}`,
   `; wall_loops = ${proc.wall_loops}`,
   `; sparse_infill_density = ${proc.sparse_infill_density}`,
+  `; sparse_infill_pattern = ${proc.sparse_infill_pattern}`,
   'G28',
   'M83',
   ';TYPE:Skirt',

@@ -112,10 +112,11 @@ function Library() {
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {shown.map((m) => (
-            <Card key={m.id} className={clsx('group relative overflow-hidden p-2', selected.has(m.id) && 'border-accent')}>
-              <button onClick={() => toggle(m.id)} className="block w-full text-left" aria-pressed={selected.has(m.id)}>
-                <img src={m.thumbnailUrl} alt="" loading="lazy" className="aspect-square w-full rounded-lg bg-surface-2 object-contain" />
-                <div className="mt-2 space-y-0.5 px-1 pb-1">
+            <Card key={m.id} className={clsx('group relative overflow-hidden transition-colors hover:border-text-3', selected.has(m.id) && 'border-accent')}>
+              <button onClick={() => toggle(m.id)} className="block h-full w-full text-left" aria-pressed={selected.has(m.id)}>
+                {/* Same frame as the Thingiverse results; the render has a transparent background. */}
+                <img src={m.thumbnailUrl} alt="" loading="lazy" className="aspect-[4/3] w-full bg-surface-2 object-contain p-2" />
+                <div className="space-y-0.5 p-3">
                   <div className="truncate text-sm font-medium" title={m.name}>
                     {m.name}
                   </div>

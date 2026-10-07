@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { SliceOverrides, SlicerProfileInfo } from '@printhub/shared';
+import { INFILL_PATTERNS, type InfillPattern, type SliceOverrides, type SlicerProfileInfo } from '@printhub/shared';
 import { Alert, Input } from '../ui';
 
-type Tab = 'support' | 'adhesion' | 'vase';
+type Tab = 'infill' | 'support' | 'adhesion' | 'vase';
+
+const INFILL_PRESETS = [10, 15, 20, 40, 100];
 
 const BRIM_LABEL = { none: 'Kein Brim', outer: 'Nur außen', auto: 'Automatisch', ears: 'Mouse Ears' } as const;
 
@@ -22,20 +24,24 @@ export function SliceOptions({
   process?: SlicerProfileInfo;
   objectCount: number;
 }) {
-  const [tab, setTab] = useState<Tab>('support');
+  const [tab, setTab] = useState<Tab>('infill');
   const p = process?.summary ?? {};
   const set = (patch: Partial<SliceOverrides>) => {
     const next = { ...value, ...patch };
     for (const k of Object.keys(next) as (keyof SliceOverrides)[]) if (next[k] === undefined) delete next[k];
     onChange(next);
   };
-  const changed = { support: !!value.support, adhesion: !!value.brim || !!value.skirt, vase: !!value.vase };
+  const profileInfill = Number(String(p.infill ?? '15').replace('%', '')) || 0;
+  // Older profiles use "zig-zag", which Orca now calls rectilinear.
+  const profilePattern = INFILL_PATTERNS[(p.infillPattern === 'zig-zag' ? 'rectilinear' : p.infillPattern) as InfillPattern] ?? (p.infillPattern ? String(p.infillPattern) : undefined);
+  const changed = { infill: !!value.infill, support: !!value.support, adhesion: !!value.brim || !!value.skirt, vase: !!value.vase };
 
   return (
     <div className="rounded-xl border border-border">
       <div className="flex overflow-x-auto overflow-y-hidden border-b border-border" role="tablist">
         {(
           [
+            ['infill', 'Infill'],
             ['support', 'Stützen'],
             ['adhesion', 'Brim & Skirt'],
             ['vase', 'Vasenmodus'],
@@ -59,6 +65,78 @@ export function SliceOptions({
       </div>
 
       <div className="space-y-4 p-4">
+        {tab === 'infill' && (
+          <>
+            <Choice
+              label="Infill"
+              profileHint={`${profileInfill} %${profilePattern ? `, ${profilePattern}` : ''}`}
+              value={value.infill ? 'custom' : 'profile'}
+              options={[
+                ['profile', 'Wie Profil'],
+                ['custom', 'Eigene Werte'],
+              ]}
+              onChange={(v) => set({ infill: v === 'profile' ? undefined : { density: profileInfill } })}
+            />
+            {value.infill && (
+              <div className="space-y-4">
+                <Labeled label="Dichte (%)">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={value.infill.density}
+                      onChange={(e) => set({ infill: { ...value.infill!, density: Number(e.target.value) } })}
+                      className="min-w-40 flex-1 accent-[var(--accent)]"
+                      aria-label="Infill-Dichte"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={value.infill.density}
+                      onChange={(e) => set({ infill: { ...value.infill!, density: clamp(Number(e.target.value), 0, 100) } })}
+                      className="w-20"
+                      aria-label="Infill-Dichte in Prozent"
+                    />
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {INFILL_PRESETS.map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => set({ infill: { ...value.infill!, density: d } })}
+                        className={clsx(
+                          'min-h-8 rounded-lg border px-2.5 text-xs',
+                          value.infill!.density === d ? 'border-accent bg-accent/10 text-text' : 'border-border text-text-2 hover:border-text-3',
+                        )}
+                      >
+                        {d} %
+                      </button>
+                    ))}
+                  </div>
+                </Labeled>
+                <Labeled label="Muster" hint={profilePattern ? `Profil: ${profilePattern}` : undefined} className="max-w-xs">
+                  <select
+                    value={value.infill.pattern ?? ''}
+                    onChange={(e) => set({ infill: { ...value.infill!, pattern: (e.target.value || undefined) as InfillPattern | undefined } })}
+                    className="min-h-10 w-full rounded-lg border border-border bg-surface px-3 text-sm"
+                  >
+                    <option value="">Wie Profil{profilePattern ? ` (${profilePattern})` : ''}</option>
+                    {(Object.entries(INFILL_PATTERNS) as [InfillPattern, string][]).map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                </Labeled>
+                {value.vase && <Alert tone="warning">Im Vasenmodus wird ohne Infill gedruckt.</Alert>}
+              </div>
+            )}
+          </>
+        )}
+
         {tab === 'support' && (
           <>
             <Choice
@@ -282,6 +360,7 @@ function Labeled({ label, hint, className, children }: { label: string; hint?: s
 export function describeOverrides(o: SliceOverrides): string[] {
   const out: string[] = [];
   if (o.vase) out.push('Vasenmodus');
+  if (o.infill && !o.vase) out.push(`Infill ${o.infill.density} %${o.infill.pattern ? ` ${INFILL_PATTERNS[o.infill.pattern]}` : ''}`);
   if (o.support) out.push(o.support.enabled ? `Stützen: ${o.support.type === 'tree' ? 'Baum' : 'Normal'}${o.support.buildPlateOnly ? ' (nur Bett)' : ''}` : 'Keine Stützen');
   if (o.brim) out.push(o.brim.type === 'none' ? 'Kein Brim' : `Brim ${BRIM_LABEL[o.brim.type].toLowerCase()}${o.brim.width !== undefined ? ` ${o.brim.width} mm` : ''}`);
   if (o.skirt) out.push(o.skirt.loops === 0 ? 'Kein Skirt' : `Skirt ${o.skirt.loops}×`);

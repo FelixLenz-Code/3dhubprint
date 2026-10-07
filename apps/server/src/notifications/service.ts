@@ -155,6 +155,18 @@ export class NotificationService {
           : { title: `📷 ${name}: Druckbett frei?`, body: `Die Kamera sieht ein leeres Bett. Bitte kurz bestätigen.${next}`, url: `/printers/${printerId}`, tag: `printer-${printerId}` },
       ).catch((err) => this.log.error({ err }, 'push dispatch failed'));
     };
+    bedCheck.onBlocked = (printerId, result) => {
+      const name = manager.name(printerId);
+      void this.send('bed_check', {
+        title: `⚠️ ${name}: Druckstart angehalten`,
+        body:
+          result.verdict === 'error'
+            ? `Die Kamera war vor dem Start nicht erreichbar (${result.error ?? 'Fehler'}). Bett prüfen und freigeben.`
+            : 'Die Kamera sieht vor dem Start etwas auf dem Bett. Bett räumen und freigeben, dann startet der Auftrag.',
+        url: `/printers/${printerId}`,
+        tag: `printer-${printerId}`,
+      }).catch((err) => this.log.error({ err }, 'push dispatch failed'));
+    };
   }
 
   /** Translates printer and job events into notifications. */

@@ -91,8 +91,16 @@ Eingerichtet wird die Erkennung so:
 2. Mindestens ein Bild des leeren Betts speichern, am besten in der Position nach einem Druck.
 
 PrintHub vergleicht den markierten Bereich mit diesen Bildern. Dabei zählen Farbe und Helligkeit;
-Änderungen der Raumbeleuchtung werden herausgerechnet. Geprüft wird nach jedem Druck und dann
-minütlich, solange das Bett als belegt gilt. Alles läuft lokal, ohne KI-Modell und ohne Cloud.
+Änderungen der Raumbeleuchtung werden herausgerechnet. Alles läuft lokal, ohne KI-Modell und ohne
+Cloud. Geprüft wird:
+
+- **nach jedem Druck** und dann minütlich, solange das Bett als belegt gilt. So merkt PrintHub,
+  wann das Teil abgenommen wurde.
+- **unmittelbar vor jedem Druckstart.** Ein Auftrag aus der Warteschlange startet nur, wenn die
+  Kamera in diesem Moment ein leeres Bett sieht. Sonst bleibt er wartend, das Bett gilt wieder als
+  belegt, und eine Push-Nachricht meldet den angehaltenen Start. Beim Drucken von Hand (Auftrag,
+  Datei, Verlauf, Schnelldruck) zeigt die Rückfrage das aktuelle Kamerabild. Sieht die Kamera
+  etwas, erscheint eine Warnung mit „Trotzdem drucken“.
 
 Die Kamera kann sich irren. Meldet sie fälschlich ein belegtes Bett, übergeht **„Trotzdem frei“**
 die Warnung. Jedes von Hand bestätigte leere Bett merkt sich PrintHub als weiteres Vergleichsbild

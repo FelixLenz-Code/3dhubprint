@@ -3,6 +3,7 @@ import { FileCode2, RotateCw } from 'lucide-react';
 import type { HistoryJob, HistoryPage, PrinterSummary } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { confirm, useAction } from '../../lib/feedback';
+import { confirmPrintStart } from '../../lib/printStart';
 import { fileLabel, formatDuration, formatFilament, isActivePrint, type Tone } from '../../lib/format';
 import { formatDate, thumbUrl } from '../../lib/files';
 import { Badge, Button, Card, Spinner, Stat } from '../ui';
@@ -81,10 +82,9 @@ function JobRow({ printer, job, editable }: { printer: PrinterSummary; job: Hist
 
   const reprint = async () => {
     if (
-      await confirm({
+      await confirmPrintStart(printer, {
         title: 'Erneut drucken?',
         body: `„${fileLabel(job.filename)}“ noch einmal drucken. Ist das Druckbett frei?`,
-        confirmLabel: 'Drucken',
       })
     )
       void run('print', () => api(`/printers/${printer.id}/files/print`, { body: { path: job.filename } }), 'Druck gestartet');

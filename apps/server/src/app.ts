@@ -67,6 +67,7 @@ export async function buildApp() {
   });
   const bedCheck = new BedCheckService(db, manager, slicing, app.log.child({ module: 'bedcheck' }), config.dataDir);
   push.attachBedCheck(manager, bedCheck);
+  slicing.beforeStart = (printerId) => bedCheck.allowsStart(printerId);
   const stats = new StatsService(db, manager, spoolman, app.log.child({ module: 'stats' }));
   const tv = new ThingiverseService(db, box, slicing, {
     apiBase: config.THINGIVERSE_API,

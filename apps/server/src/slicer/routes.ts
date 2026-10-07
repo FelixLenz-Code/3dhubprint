@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { assignmentSchema, bedClearSchema, createJobSchema, moveJobSchema, sendJobSchema } from '@printhub/shared';
+import { assignmentSchema, bedClearSchema, createJobSchema, deleteJobsSchema, moveJobSchema, sendJobSchema } from '@printhub/shared';
 import type { BedCheckService } from '../bedcheck/service.js';
 import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
@@ -206,6 +206,13 @@ export async function slicerRoutes(
       const started = await slicing.confirmBedClear(id, start);
       audit(req, 'printer.bed_clear', `#${id}${started ? ` start #${started.id}` : ''}`);
       return { ok: true, started: started ?? null };
+    });
+
+    admin.post('/jobs/delete', async (req) => {
+      const { ids } = deleteJobsSchema.parse(req.body);
+      const result = slicing.deleteJobs(ids);
+      if (result.deleted.length) audit(req, 'job.delete', result.deleted.map((id) => `#${id}`).join(', '));
+      return result;
     });
 
     admin.delete('/jobs/:id', async (req) => {

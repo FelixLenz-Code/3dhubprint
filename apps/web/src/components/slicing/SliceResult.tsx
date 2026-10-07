@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Clock, Coins, FileText, Layers, ListPlus, Play, Save, Send, Weight } from 'lucide-react';
 import { estimateCost, spoolLabel, type JobInfo, type PrinterSummary, type SlicerProfileInfo } from '@printhub/shared';
+import { confirmPrintStart } from '../../lib/printStart';
 import { api } from '../../lib/api';
 import { toast, useAction } from '../../lib/feedback';
 import { formatClock, formatDuration, formatFilament, isActivePrint } from '../../lib/format';
@@ -74,12 +75,26 @@ export function SliceResult({
     );
   }
 
-  const send = (print: boolean) =>
-    run(print ? 'print' : 'send', async () => {
+  const send = async (print: boolean) => {
+    if (
+      print &&
+      !(await confirmPrintStart(printer, {
+        title: 'Druck starten?',
+        body: (
+          <>
+            „{job.models.map((m) => m.name).join(', ')}“ auf <b>{printer.name}</b> drucken.
+          </>
+        ),
+        onlyWithCamera: true,
+      }))
+    )
+      return;
+    await run(print ? 'print' : 'send', async () => {
       await api(`/jobs/${job.id}/send`, { body: { print } });
       toast(print ? `Druck auf ${printer.name} gestartet` : `An ${printer.name} übertragen`);
       onDone();
     });
+  };
 
   return (
     <div className="space-y-5">

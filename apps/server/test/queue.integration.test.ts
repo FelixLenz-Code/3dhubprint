@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
+import jpeg from 'jpeg-js';
 import type { JobInfo, PrinterSummary } from '@printhub/shared';
 import { buildApp } from '../src/app.js';
 import { FakeMoonraker } from './fakeMoonraker.js';
@@ -14,6 +16,20 @@ let base: string;
 let cookie: string;
 let printerId: number;
 let modelId: number;
+let cam: http.Server;
+
+/** Camera image: a plain bed, optionally with a part on it. */
+function bedImage(part: boolean): Buffer {
+  const w = 160, h = 120;
+  const data = Buffer.alloc(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const x = i % w, y = Math.floor(i / w);
+    const onPart = part && x >= 70 && x < 95 && y >= 80 && y < 100;
+    data.set(onPart ? [230, 110, 30, 255] : [70 + ((x * 7 + y * 13) % 11), 95, 120, 255], i * 4);
+  }
+  return Buffer.from(jpeg.encode({ data, width: w, height: h }, 90).data);
+}
+let frame = bedImage(false);
 
 async function api(p: string, init: { method?: string; body?: unknown; form?: FormData } = {}) {
   const method = init.method ?? (init.body !== undefined || init.form ? 'POST' : 'GET');
@@ -54,7 +70,10 @@ async function finishPrint(result: 'complete' | 'cancelled' | 'error' = 'complet
 }
 
 beforeAll(async () => {
+  cam = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'image/jpeg' }).end(frame));
+  await new Promise<void>((r) => cam.listen(0, '127.0.0.1', r));
   fake = new FakeMoonraker();
+  fake.webcams = [{ name: 'cam', enabled: true, stream_url: '/s', snapshot_url: `http://127.0.0.1:${(cam.address() as AddressInfo).port}/snap` }];
   const fakeUrl = await fake.start();
   app = await buildApp();
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -85,9 +104,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await app.close();
   await fake.stop();
+  cam.close();
 });
 
-describe('print queue', () => {
+// Each test slices and simulates whole prints; with all test files in parallel that takes a while.
+describe('print queue', { timeout: 20_000 }, () => {
   it('waits for the bed to be confirmed empty, then starts the next job', async () => {
     expect((await printer()).bedClear).toBe(false);
     const a = await slicedJob();
@@ -143,6 +164,37 @@ describe('print queue', () => {
     const r = await api(`/api/printers/${printerId}/bed-clear`, { body: { start: false } });
     expect(r.body.started).toBeNull();
     expect((await printer()).bedClear).toBe(true);
+  });
+
+  it('looks at the bed with the camera right before a queued job starts', async () => {
+    await api(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'confirm', region: { x0: 0.05, y0: 0.5, x1: 0.95, y1: 0.95 } } });
+    frame = bedImage(false);
+    expect((await api(`/api/printers/${printerId}/bed-check/references`, { body: {} })).status).toBe(201);
+    expect((await printer()).bedClear).toBe(true);
+
+    // Released earlier, but now something lies on the bed: the job keeps waiting.
+    frame = bedImage(true);
+    const uploads = fake.uploads.length;
+    const e = await slicedJob();
+    await api(`/api/jobs/${e}/enqueue`, { body: {} });
+    await until(async () => !(await printer()).bedClear);
+    expect(fake.uploads.length).toBe(uploads);
+    expect((await printer()).bedCheck?.last?.verdict).toBe('occupied');
+
+    // A person confirming the bed (also against the camera) starts without another look.
+    const r = await api(`/api/printers/${printerId}/bed-clear`, { body: { start: true } });
+    expect(r.body.started?.status).toBe('printing');
+    expect(fake.uploads.length).toBe(uploads + 1);
+  });
+
+  it('starts a queued job when the camera sees an empty bed', async () => {
+    await finishPrint('complete');
+    frame = bedImage(false);
+    await api(`/api/printers/${printerId}/bed-clear`, { body: { start: false } });
+    const uploads = fake.uploads.length;
+    const f = await slicedJob();
+    await api(`/api/jobs/${f}/enqueue`, { body: {} });
+    await until(async () => fake.uploads.length === uploads + 1);
   });
 
   it('rejects enqueueing jobs that are not sliced', async () => {

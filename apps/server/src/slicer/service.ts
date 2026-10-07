@@ -513,6 +513,21 @@ export class SlicingService extends EventEmitter<Events> {
     if (j.status === 'waiting' && j.printerId) this.renumberQueue(j.printerId);
   }
 
+  /** Deletes several jobs; ones that can't go right now (e.g. uploading) are reported back. */
+  deleteJobs(ids: number[]): { deleted: number[]; skipped: { id: number; reason: string }[] } {
+    const deleted: number[] = [];
+    const skipped: { id: number; reason: string }[] = [];
+    for (const id of new Set(ids)) {
+      try {
+        this.deleteJob(id);
+        deleted.push(id);
+      } catch (err) {
+        skipped.push({ id, reason: (err as Error).message });
+      }
+    }
+    return { deleted, skipped };
+  }
+
   /** Saves a reviewed draft so it shows up in the job list. */
   keepJob(id: number): JobInfo {
     const j = this.jobRow(id);
@@ -650,10 +665,19 @@ export class SlicingService extends EventEmitter<Events> {
     return this.queueOf(j.printerId).map((q) => this.toJobInfo(q));
   }
 
-  /** The user confirmed the bed is empty; optionally start the next queued job. */
+  /**
+   * Last look at the bed right before a queued job starts (camera check); false keeps the job
+   * waiting. Wired by the bed check service.
+   */
+  beforeStart?: (printerId: number) => Promise<boolean>;
+
+  /**
+   * Someone (or the camera, twice in a row) just confirmed the bed is empty; optionally start the
+   * next queued job without looking again.
+   */
   async confirmBedClear(printerId: number, start: boolean): Promise<JobInfo | undefined> {
     this.manager.setBedClear(printerId, true);
-    return start ? this.tryStart(printerId) : undefined;
+    return start ? this.tryStart(printerId, true) : undefined;
   }
 
   private queueOf(printerId: number): JobRow[] {
@@ -675,7 +699,7 @@ export class SlicingService extends EventEmitter<Events> {
   }
 
   /** Starts the next queued job when the printer is idle and its bed was confirmed empty. */
-  async tryStart(printerId: number): Promise<JobInfo | undefined> {
+  async tryStart(printerId: number, justConfirmed = false): Promise<JobInfo | undefined> {
     if (this.starting.has(printerId)) return undefined;
     const client = this.manager.client(printerId);
     const st = client?.status;
@@ -686,6 +710,11 @@ export class SlicingService extends EventEmitter<Events> {
 
     this.starting.add(printerId);
     try {
+      // The bed may have been released long ago: check it is still empty.
+      if (!justConfirmed && this.beforeStart && !(await this.beforeStart(printerId))) {
+        this.manager.setBedClear(printerId, false);
+        return undefined;
+      }
       // Occupied from now on, even before Klipper reports "printing".
       this.manager.setBedClear(printerId, false);
       return await this.sendJob(next.id, true);
