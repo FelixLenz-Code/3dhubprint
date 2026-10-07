@@ -127,14 +127,13 @@ export function cellThreshold(sensitivity: number): number {
 }
 
 /**
- * clear: no cell changed and none close to the threshold. occupied: at least one cell clearly
- * changed. Anything in between is left to a human.
+ * clear: no cell changed and none close to the threshold `t`. occupied: at least one cell
+ * clearly changed. Anything in between is left to a human.
  */
-export function verdict(cmp: Comparison, sensitivity: number): { verdict: BedVerdict; changed: number[]; maxDiff: number } {
-  const t = cellThreshold(sensitivity);
+export function verdict(cells: Float32Array, t: number): { verdict: BedVerdict; changed: number[]; maxDiff: number } {
   const changed: number[] = [];
   let maxDiff = 0;
-  cmp.cells.forEach((v, i) => {
+  cells.forEach((v, i) => {
     maxDiff = Math.max(maxDiff, v);
     if (v > t) changed.push(i);
   });
@@ -143,7 +142,7 @@ export function verdict(cmp: Comparison, sensitivity: number): { verdict: BedVer
 }
 
 /** The camera image with the bed region outlined and changed cells marked, as PNG. */
-export function renderOverlay(img: Rgba, r: Region, cmp: Comparison | undefined, changed: number[], width = 640): Buffer {
+export function renderOverlay(img: Rgba, r: Region, cmp: { cols: number; rows: number } | undefined, changed: number[], width = 640): Buffer {
   const scale = Math.min(1, width / img.width);
   const W = Math.round(img.width * scale), H = Math.round(img.height * scale);
   const out = new Uint8Array(W * H * 4);

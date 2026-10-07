@@ -89,10 +89,23 @@ Eingerichtet wird die Erkennung so:
 
 1. Im Kamerabild einen Rahmen um die Druckfläche ziehen.
 2. Mindestens ein Bild des leeren Betts speichern, am besten in der Position nach einem Druck.
+   Bei mehreren Druckplatten für jede Platte ein Bild speichern.
+3. Die Methode wählen (jederzeit umschaltbar):
+   - **KI-Erkennung** (Standard): Ein vortrainiertes Bildmodell (DINOv2-small) beschreibt jeden
+     kleinen Ausschnitt des Betts. Ein Ausschnitt gilt als belegt, wenn er keinem Ausschnitt an
+     derselben Stelle der Leerbilder ähnelt. Verglichen wird nur mit den Leerbildern, die insgesamt
+     am besten passen, also in der Regel mit derselben Platte. Helligkeit, Plattenfarbe und leichte
+     Spiegelungen stören kaum, flache Reste werden erkannt. Das Modell (89 MB) läuft lokal auf der
+     CPU, ohne Cloud, und braucht etwa 1 s pro Prüfung. Es steckt im Docker-Image; in der
+     Entwicklung lädt `pnpm --filter @printhub/server model` es herunter. Fehlt es, läuft der
+     Bildvergleich.
+   - **Bildvergleich:** Farbe und Helligkeit des Bereichs werden mit den Leerbildern verglichen,
+     Änderungen der Raumbeleuchtung herausgerechnet. Das ist sehr schnell, aber empfindlicher gegen
+     Spiegelungen und andere Platten.
 
-PrintHub vergleicht den markierten Bereich mit diesen Bildern. Dabei zählen Farbe und Helligkeit;
-Änderungen der Raumbeleuchtung werden herausgerechnet. Alles läuft lokal, ohne KI-Modell und ohne
-Cloud. Geprüft wird:
+Jede Bestätigung „Bett ist frei“ (auch „Trotzdem frei“ nach einer falschen Belegt-Meldung) speichert
+das Bild als weiteres Leerbild, bis zu 20. So lernt die Erkennung starke Lichtflecken und neue
+Platten. Geprüft wird:
 
 - **nach jedem Druck** und dann minütlich, solange das Bett als belegt gilt. So merkt PrintHub,
   wann das Teil abgenommen wurde.

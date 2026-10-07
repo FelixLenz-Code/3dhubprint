@@ -13,6 +13,12 @@ COPY . .
 RUN pnpm -r build \
  && pnpm --filter @printhub/server deploy --prod /out \
  && cp -r apps/web/dist /out/web \
+ # Model for the AI bed check (hash-checked), and only this platform's onnxruntime binaries.
+ && node apps/server/scripts/fetch-model.mjs /out/models/dinov2-small.onnx \
+ && ORT=$(echo /out/node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v*) \
+ && find "$ORT" -mindepth 1 -maxdepth 1 ! -name linux -exec rm -rf {} + \
+ && find "$ORT/linux" -mindepth 1 -maxdepth 1 ! -name "$(node -p process.arch)" -exec rm -rf {} + \
+ && test -f "$ORT/linux/$(node -p process.arch)/onnxruntime_binding.node" \
  # pnpm skips native build scripts; compile better-sqlite3 for this Node/glibc explicitly.
  && cd /out/node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 \
  && npm run install \
@@ -61,6 +67,7 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8080 \
     DATA_DIR=/data \
+    BEDCHECK_MODEL=/app/models/dinov2-small.onnx \
     WEB_DIST=/app/web
 WORKDIR /app
 COPY --from=build /out ./

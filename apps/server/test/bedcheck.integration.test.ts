@@ -48,6 +48,8 @@ const run = async () => (await api<BedCheckResult>(`/api/printers/${printerId}/b
 const region = { x0: 0.05, y0: 0.55, x1: 0.95, y1: 0.95 };
 
 beforeAll(async () => {
+  // Without the AI model the AI method falls back to the classic comparison tested here (ai.test.ts covers the model).
+  process.env.BEDCHECK_MODEL = '/nonexistent/model.onnx';
   cam = http.createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'image/jpeg' });
     res.end(frame);
@@ -81,6 +83,7 @@ describe('bed check', () => {
     expect((await api(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'auto', region: null } })).status).toBe(400);
     const info = await api<BedCheckInfo>(`/api/printers/${printerId}/bed-check`, { method: 'PUT', body: { mode: 'confirm', region } });
     expect(info.body.state).toMatchObject({ mode: 'confirm', ready: false });
+    expect(info.body).toMatchObject({ settings: { method: 'ai' }, aiAvailable: false });
     expect((await api(`/api/printers/${printerId}/bed-check/run`, { body: {} })).status).toBe(400);
 
     expect((await api(`/api/printers/${printerId}/bed-check/references`, { body: {} })).status).toBe(201);
@@ -93,7 +96,7 @@ describe('bed check', () => {
 
   it('tells an empty bed (also in other light) from one with a part, and asks in confirm mode', async () => {
     frame = scene({ brightness: 0.8 });
-    expect((await run()).verdict).toBe('clear');
+    expect(await run()).toMatchObject({ verdict: 'clear', method: 'classic' });
     expect((await printer()).bedCheck).toMatchObject({ mode: 'confirm', suggestClear: true });
 
     // "No, still occupied" stops asking for a while.

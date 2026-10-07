@@ -11,7 +11,8 @@
     "build": "tsup",
     "start": "node dist/index.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "model": "node scripts/fetch-model.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.0",
@@ -27,6 +28,7 @@
     "fastify-plugin": "^5.0.0",
     "fflate": "^0.8",
     "jpeg-js": "0.4.4",
+    "onnxruntime-node": "1.30.0",
     "otplib": "^12.0.1",
     "qrcode": "^1.5.4",
     "web-push": "^3.6.7",

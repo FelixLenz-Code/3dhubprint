@@ -4,3 +4,4 @@ data/
 .env
 *.log
 /spoolman/
+/apps/server/models/

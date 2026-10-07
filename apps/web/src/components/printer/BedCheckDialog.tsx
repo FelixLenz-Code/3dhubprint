@@ -3,9 +3,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Camera, RefreshCw, ScanSearch, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import {
+  BED_CHECK_METHODS,
   BED_CHECK_MODES,
   MAX_BED_REFERENCES,
   type BedCheckInfo,
+  type BedCheckMethod,
   type BedCheckMode,
   type BedCheckResult,
   type BedCheckSettings,
@@ -21,6 +23,11 @@ const MODE_HINTS: Record<BedCheckMode, string> = {
   off: 'Das Druckbett wird nach jedem Druck von Hand als frei bestätigt.',
   confirm: 'Sieht die Kamera ein leeres Bett, fragt PrintHub nach (Banner und Push), ob das stimmt. Erst nach deiner Bestätigung startet der nächste Auftrag.',
   auto: 'Sieht die Kamera zweimal hintereinander ein eindeutig leeres Bett, wird es ohne Rückfrage freigegeben und der nächste Auftrag startet. Bei unsicherem Ergebnis wird nie freigegeben.',
+};
+
+const METHOD_HINTS: Record<BedCheckMethod, string> = {
+  ai: 'Ein lokales Bildmodell vergleicht Form und Struktur jedes kleinen Bildausschnitts mit den Bildern des leeren Betts. Unempfindlich gegen Helligkeit und unterschiedliche Platten, erkennt auch flache Reste. Läuft auf dem Server, ohne Cloud (ca. 1 s pro Prüfung).',
+  classic: 'Vergleicht Farbe und Helligkeit des Bereichs mit den Bildern des leeren Betts. Sehr schnell, reagiert aber auf Spiegelungen und andere Druckplatten leichter mit „belegt“.',
 };
 
 export const VERDICT_LABELS: Record<BedCheckResult['verdict'], string> = {
@@ -172,7 +179,7 @@ function BedCheckForm({ printer, onDone }: { printer: PrinterSummary; onDone: ()
           <section className="space-y-2">
             <h3 className="font-medium">2. Bilder vom leeren Bett</h3>
             <p className="text-sm text-text-2">
-              Mindestens ein Bild des leeren Betts, am besten in der Position nach einem Druck. Jedes Mal, wenn jemand „Bett ist frei“ bestätigt, merkt sich PrintHub ein weiteres Bild (bis zu {MAX_BED_REFERENCES}); so wird die Erkennung mit der Zeit sicherer.
+              Mindestens ein Bild des leeren Betts, am besten in der Position nach einem Druck. Wechselst du zwischen Druckplatten, speichere für jede Platte ein eigenes Bild; verglichen wird mit den Bildern, die am besten passen. Jedes Mal, wenn jemand „Bett ist frei“ bestätigt (auch über „Trotzdem frei“), merkt sich PrintHub ein weiteres Bild (bis zu {MAX_BED_REFERENCES}); so wird die Erkennung mit der Zeit sicherer.
             </p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {refs.map((r) => (
@@ -202,7 +209,29 @@ function BedCheckForm({ printer, onDone }: { printer: PrinterSummary; onDone: ()
           </section>
 
           <section className="space-y-2">
-            <h3 className="font-medium">3. Empfindlichkeit und Test</h3>
+            <h3 className="font-medium">3. Erkennung</h3>
+            <div role="radiogroup" aria-label="Methode" className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+              {(Object.keys(BED_CHECK_METHODS) as BedCheckMethod[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.method === m}
+                  onClick={() => setDraft({ ...draft, method: m })}
+                  className={clsx('min-h-9 rounded-md px-3 text-sm', draft.method === m ? 'bg-surface-2 font-medium text-text' : 'text-text-2 hover:text-text')}
+                >
+                  {BED_CHECK_METHODS[m]}
+                </button>
+              ))}
+            </div>
+            <p className="text-sm text-text-2">{METHOD_HINTS[draft.method]}</p>
+            {draft.method === 'ai' && !info.data.aiAvailable && (
+              <Alert tone="warning">Das KI-Modell ist auf dem Server nicht installiert; bis dahin läuft der Bildvergleich.</Alert>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="font-medium">4. Empfindlichkeit und Test</h3>
             <label className="flex items-center gap-3">
               <span className="w-20 shrink-0 text-sm text-text-2">Grob</span>
               <input
@@ -253,6 +282,7 @@ export function CheckResult({ printerId, result }: { printerId: number; result: 
           </span>
         )}
         {result.verdict === 'uncertain' && !result.changed && <span className="font-normal text-text-3"> · knapp an der Grenze</span>}
+        {result.method && <span className="font-normal text-text-3"> · {BED_CHECK_METHODS[result.method]}</span>}
       </p>
       {result.verdict !== 'error' && (
         <img src={`/api/printers/${printerId}/bed-check/overlay?t=${result.at}`} alt="Kamerabild mit markierten Abweichungen" className="w-full max-w-xl rounded-lg bg-black" />

@@ -24,6 +24,15 @@ Container neben PrintHub; PrintHub spricht es nur über dessen REST-API an.
 - Projekt: https://github.com/Donkie/Spoolman
 - Lizenz: MIT
 
+## DINOv2 (Bett-Erkennung)
+
+Das Docker-Image enthält das unveränderte ONNX-Modell `onnx-community/dinov2-small` (Gewichte von
+Meta AI, DINOv2) für die KI-Bett-Erkennung; es wird mit ONNX Runtime (`onnxruntime-node`, MIT)
+ausgeführt.
+
+- Projekt: https://github.com/facebookresearch/dinov2, https://huggingface.co/onnx-community/dinov2-small
+- Lizenz: Apache-2.0
+
 ## npm-Pakete
 
 Die im Docker-Image enthaltenen npm-Pakete stehen unter permissiven Lizenzen (MIT, ISC,

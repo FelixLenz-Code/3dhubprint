@@ -10,6 +10,7 @@ import {
   type BedCheckResult,
   type BedCheckSettings,
   type BedCheckState,
+  type BedCheckMethod,
   type BedReference,
 } from '@printhub/shared';
 import type { Db } from '../db/index.js';
@@ -18,7 +19,8 @@ import type { PrinterManager } from '../printers/manager.js';
 import type { PrintEvent } from '../printers/events.js';
 import { webcamUrl } from '../printers/routes.js';
 import type { SlicingService } from '../slicer/service.js';
-import { compare, decodeJpeg, extractFeatures, renderOverlay, verdict, cellThreshold, type Features, type Rgba } from './analyze.js';
+import { compare, decodeJpeg, extractFeatures, renderOverlay, verdict, cellThreshold, type Features, type Region, type Rgba } from './analyze.js';
+import { aiThreshold, compareAi, embed, modelAvailable, type PatchFeatures } from './ai.js';
 
 export class BedCheckError extends Error {
   constructor(
@@ -39,8 +41,17 @@ const AUTO_CLEAR_STREAK = 2;
 /** A rejected suggestion is not repeated for this long. */
 const REJECT_PAUSE_MS = 10 * 60_000;
 const SNAPSHOT_TIMEOUT_MS = 8_000;
-/** A confirmed-empty image this close to a reference adds nothing new. */
-const DUPLICATE_SCORE = 0.35;
+/** A confirmed-empty image this close to a reference adds nothing new (per method). */
+const DUPLICATE_SCORE: Record<BedCheckMethod, number> = { classic: 0.35, ai: 0.2 };
+
+/** Per-cell differences from the empty bed, from whichever method ran. */
+interface Analysis {
+  method: BedCheckMethod;
+  cols: number;
+  rows: number;
+  cells: Float32Array;
+  threshold: number;
+}
 
 interface PrinterCheck {
   last: BedCheckResult | null;
@@ -61,6 +72,7 @@ interface PrinterCheck {
 export class BedCheckService {
   private readonly checks = new Map<number, PrinterCheck>();
   private readonly features = new Map<string, Features>();
+  private readonly embeddings = new Map<string, PatchFeatures>();
   private timer?: NodeJS.Timeout;
   private readonly dir: string;
   /** Push messages; wired by the notification service. */
@@ -105,6 +117,7 @@ export class BedCheckService {
     this.db.update(printers).set({ bedCheck: JSON.stringify(next) }).where(eq(printers.id, printerId)).run();
     // Images of another camera say nothing about this one.
     if (before.webcam !== next.webcam) for (const r of this.references(printerId)) this.removeReference(printerId, r.id);
+    if (JSON.stringify(before.region) !== JSON.stringify(next.region)) this.forgetFeatures(this.references(printerId).map((r) => r.id));
     const c = this.check(printerId);
     c.streak = 0;
     c.suggestClear = false;
@@ -114,7 +127,7 @@ export class BedCheckService {
   }
 
   info(printerId: number): BedCheckInfo {
-    return { settings: this.settings(printerId), references: this.references(printerId), state: this.state(printerId) };
+    return { settings: this.settings(printerId), references: this.references(printerId), state: this.state(printerId), aiAvailable: modelAvailable() };
   }
 
   references(printerId: number): BedReference[] {
@@ -154,8 +167,15 @@ export class BedCheckService {
     const res = this.db.delete(bedReferences).where(and(eq(bedReferences.id, refId), eq(bedReferences.printerId, printerId))).run();
     if (!res.changes) throw new BedCheckError('Referenzbild nicht gefunden', 404);
     fs.rmSync(this.file(refId), { force: true });
-    for (const key of this.features.keys()) if (key.startsWith(`${refId}:`)) this.features.delete(key);
+    this.forgetFeatures([refId]);
     this.publish(printerId);
+  }
+
+  private forgetFeatures(refIds: number[]) {
+    const prefixes = refIds.map((id) => `${id}:`);
+    for (const cache of [this.features, this.embeddings]) {
+      for (const key of cache.keys()) if (prefixes.some((p) => key.startsWith(p))) cache.delete(key);
+    }
   }
 
   /**
@@ -167,10 +187,9 @@ export class BedCheckService {
     if (s.mode === 'off' || !s.region) return;
     try {
       const jpg = await this.snapshot(printerId);
-      const refs = this.referenceFeatures(printerId, s);
-      if (refs.length) {
-        const cmp = compare(extractFeatures(decodeJpeg(jpg), s.region), refs);
-        if (cmp && verdict(cmp, s.sensitivity).maxDiff < DUPLICATE_SCORE) return;
+      if (this.references(printerId).length) {
+        const a = await this.analyze(printerId, s, decodeJpeg(jpg));
+        if (a && verdict(a.cells, a.threshold).maxDiff < DUPLICATE_SCORE[a.method]) return;
       }
       await this.addReference(printerId, 'confirmed', jpg);
     } catch (err) {
@@ -188,7 +207,7 @@ export class BedCheckService {
     c.running = true;
     try {
       const img = decodeJpeg(await this.snapshot(printerId));
-      return this.evaluate(printerId, s, img);
+      return await this.evaluate(printerId, s, img);
     } catch (err) {
       c.last = { verdict: 'error', at: Date.now(), error: (err as Error).message };
       c.overlay = undefined;
@@ -231,13 +250,13 @@ export class BedCheckService {
     this.publish(printerId);
   }
 
-  private evaluate(printerId: number, s: BedCheckSettings, img: Rgba): BedCheckResult {
+  private async evaluate(printerId: number, s: BedCheckSettings, img: Rgba): Promise<BedCheckResult> {
     const c = this.check(printerId);
-    const cmp = compare(extractFeatures(img, s.region!), this.referenceFeatures(printerId, s));
-    if (!cmp) throw new BedCheckError('Referenzbilder passen nicht zum Kamerabild (andere Auflösung?)');
-    const v = verdict(cmp, s.sensitivity);
-    c.last = { verdict: v.verdict, at: Date.now(), score: v.maxDiff / cellThreshold(s.sensitivity), changed: v.changed.length };
-    c.overlay = renderOverlay(img, s.region!, cmp, v.changed);
+    const a = await this.analyze(printerId, s, img);
+    if (!a) throw new BedCheckError('Referenzbilder passen nicht zum Kamerabild (andere Auflösung?)');
+    const v = verdict(a.cells, a.threshold);
+    c.last = { verdict: v.verdict, at: Date.now(), score: v.maxDiff / a.threshold, changed: v.changed.length, method: a.method };
+    c.overlay = renderOverlay(img, s.region!, a, v.changed);
     c.streak = v.verdict === 'clear' ? c.streak + 1 : 0;
     this.decide(printerId, s);
     this.publish(printerId);
@@ -334,8 +353,45 @@ export class BedCheckService {
     return c;
   }
 
-  private referenceFeatures(printerId: number, s: BedCheckSettings): Features[] {
+  /**
+   * Compares the image with the empty-bed images using the configured method. The AI method
+   * falls back to the classic comparison when its model is missing or fails.
+   */
+  private async analyze(printerId: number, s: BedCheckSettings, img: Rgba): Promise<Analysis | undefined> {
     const region = s.region!;
+    if (s.method === 'ai' && modelAvailable()) {
+      try {
+        const cmp = compareAi(await embed(img, region), await this.referenceEmbeddings(printerId, region));
+        if (cmp) return { method: 'ai', cols: cmp.cols, rows: cmp.rows, cells: cmp.cells, threshold: aiThreshold(s.sensitivity) };
+      } catch (err) {
+        this.log.warn({ printer: printerId, err: (err as Error).message }, 'bed check: AI model failed, using the classic comparison');
+      }
+    }
+    const cmp = compare(extractFeatures(img, region), this.referenceFeatures(printerId, region));
+    return cmp && { method: 'classic', cols: cmp.cols, rows: cmp.rows, cells: cmp.cells, threshold: cellThreshold(s.sensitivity) };
+  }
+
+  private async referenceEmbeddings(printerId: number, region: Region): Promise<PatchFeatures[]> {
+    const out: PatchFeatures[] = [];
+    for (const r of this.references(printerId)) {
+      const key = `${r.id}:${region.x0},${region.y0},${region.x1},${region.y1}`;
+      let f = this.embeddings.get(key);
+      if (!f) {
+        let img: Rgba;
+        try {
+          img = decodeJpeg(fs.readFileSync(this.file(r.id)));
+        } catch {
+          continue;
+        }
+        f = await embed(img, region);
+        this.embeddings.set(key, f);
+      }
+      out.push(f);
+    }
+    return out;
+  }
+
+  private referenceFeatures(printerId: number, region: Region): Features[] {
     const out: Features[] = [];
     for (const r of this.references(printerId)) {
       const key = `${r.id}:${region.x0},${region.y0},${region.x1},${region.y1}`;
