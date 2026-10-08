@@ -143,7 +143,7 @@ export class SpoolmanService extends EventEmitter<Events> {
       });
       filament = toFilamentInfo(f);
     } else {
-      filament = toFilamentInfo(await this.request<Json>('/api/v1/filament', { method: 'POST', body: JSON.stringify(await this.filamentBody(b.filament!)) }));
+      filament = await this.createFilament(b.filament!);
     }
     const initial = b.initialWeight ?? filament.weight ?? undefined;
     if (b.usedWeight !== undefined && initial !== undefined && b.usedWeight > initial) {
@@ -190,6 +190,10 @@ export class SpoolmanService extends EventEmitter<Events> {
       spool_weight: f.spoolWeight ?? null,
       price: f.price ?? null,
     };
+  }
+
+  async createFilament(input: NewFilamentInput): Promise<FilamentInfo> {
+    return toFilamentInfo(await this.request<Json>('/api/v1/filament', { method: 'POST', body: JSON.stringify(await this.filamentBody(input)) }));
   }
 
   async updateFilament(id: number, input: NewFilamentInput): Promise<FilamentInfo> {

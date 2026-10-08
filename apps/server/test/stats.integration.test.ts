@@ -262,6 +262,14 @@ describe('Spoolman', () => {
     expect((await api(`/api/spoolman/spools/${id}`, { method: 'DELETE' })).status).toBe(404);
   });
 
+  it('creates filaments without a spool', async () => {
+    const r = await api('/api/spoolman/filaments', { body: { vendor: 'Bambu', name: 'PETG HF', material: 'PETG', color: '#00AA00', density: 1.27, weight: 1000, price: 24 } });
+    expect(r.status).toBe(201);
+    expect(r.body).toMatchObject({ name: 'PETG HF', vendor: 'Bambu', color: '#00aa00', price: 24 });
+    expect(spoolman.spools.some((s) => (s.filament as { id: number }).id === r.body.id)).toBe(false);
+    expect((await api('/api/spoolman/filaments', { body: { name: 'x', material: 'PLA' } })).status).toBe(400);
+  });
+
   it('leaves tracking to Moonraker when it has its own Spoolman integration', async () => {
     fake.components = ['history', 'spoolman'];
     await api(`/api/printers/${printerId}`, { method: 'PUT', body: { name: 'Fake', url: (await printer()).url } }); // reconnect

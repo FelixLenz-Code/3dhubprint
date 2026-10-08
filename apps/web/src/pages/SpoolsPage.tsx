@@ -11,7 +11,7 @@ import { formatMoney, formatWeight, useSpoolmanStatus } from '../lib/stats';
 import { Badge, Button, Card, Input, Segmented, Spinner, Tile } from '../components/ui';
 import { CreateSpoolDialog } from '../components/spools/CreateSpoolDialog';
 import { EditSpoolDialog } from '../components/spools/EditSpoolDialog';
-import { EditFilamentDialog } from '../components/spools/EditFilamentDialog';
+import { FilamentDialog } from '../components/spools/FilamentDialog';
 
 const TABS = { spools: 'Spulen', filaments: 'Filamente' } as const;
 type Tab = keyof typeof TABS;
@@ -38,6 +38,7 @@ export function SpoolsPage() {
   const filaments = useQuery({ queryKey: ['filaments'], queryFn: () => api<FilamentInfo[]>('/spoolman/filaments'), enabled: configured });
   // null: closed, undefined: no filament preselected.
   const [creating, setCreating] = useState<{ filamentId?: number } | null>(null);
+  const [creatingFilament, setCreatingFilament] = useState(false);
 
   // Bypasses the server's short cache, e.g. after changes made in Spoolman itself.
   const refresh = async () => {
@@ -68,8 +69,8 @@ export function SpoolsPage() {
               </a>
             )}
             {isAdmin && (
-              <Button onClick={() => setCreating({})} className="px-3 sm:px-4">
-                <Plus className="size-4" /> <span className="hidden sm:inline">Spule anlegen</span>
+              <Button onClick={() => (tab === 'spools' ? setCreating({}) : setCreatingFilament(true))} className="px-3 sm:px-4">
+                <Plus className="size-4" /> <span className="hidden sm:inline">{tab === 'spools' ? 'Spule anlegen' : 'Filament anlegen'}</span>
                 <span className="sm:hidden">Neu</span>
               </Button>
             )}
@@ -105,7 +106,12 @@ export function SpoolsPage() {
         </>
       )}
 
-      {isAdmin && <CreateSpoolDialog open={creating !== null} onClose={() => setCreating(null)} filamentId={creating?.filamentId} />}
+      {isAdmin && (
+        <>
+          <CreateSpoolDialog open={creating !== null} onClose={() => setCreating(null)} filamentId={creating?.filamentId} />
+          <FilamentDialog open={creatingFilament} onClose={() => setCreatingFilament(false)} />
+        </>
+      )}
     </div>
   );
 }
@@ -300,7 +306,7 @@ function FilamentList({ filaments, spools, editable, onCreate }: { filaments: Fi
   return (
     <Card className="overflow-hidden">
       {filaments.length === 0 ? (
-        <p className="p-5 text-sm text-text-3">Noch keine Filamente. Sie entstehen beim Anlegen einer Spule.</p>
+        <p className="p-5 text-sm text-text-3">Noch keine Filamente.{editable && ' Mit „Filament anlegen“ das erste erfassen.'}</p>
       ) : (
         <table className="w-full text-sm">
           <thead className="whitespace-nowrap border-b border-border text-left text-xs text-text-3">
@@ -363,7 +369,7 @@ function FilamentList({ filaments, spools, editable, onCreate }: { filaments: Fi
           </tbody>
         </table>
       )}
-      {editable && <EditFilamentDialog filament={editing} spoolCount={editing ? (counts.get(editing.id)?.all ?? 0) : 0} onClose={() => setEditing(null)} />}
+      {editable && <FilamentDialog open={!!editing} filament={editing} spoolCount={editing ? (counts.get(editing.id)?.all ?? 0) : 0} onClose={() => setEditing(null)} />}
     </Card>
   );
 }

@@ -60,6 +60,13 @@ export async function spoolmanRoutes(
       return { ok: true };
     });
 
+    admin.post('/spoolman/filaments', async (req, reply) => {
+      const filament = await spoolman.createFilament(newFilamentSchema.parse(req.body));
+      auth.audit(req.auth!.user.id, 'spoolman.filament_create', `#${filament.id}`, requestMeta(req));
+      reply.code(201);
+      return filament;
+    });
+
     admin.patch('/spoolman/filaments/:id', async (req) => {
       const { id } = idParams.parse(req.params);
       return spoolman.updateFilament(id, newFilamentSchema.parse(req.body));
