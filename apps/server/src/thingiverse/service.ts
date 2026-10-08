@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { unzipSync } from 'fflate';
 import type { ModelInfo, ThingDetails, ThingFile, ThingSearchPage, ThingSummary, ThingiverseSort, ThingiverseSuggestion } from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { appSettings } from '../db/schema.js';
 import type { SecretBox } from '../crypto.js';
 import type { SlicingService } from '../slicer/service.js';
 import { formatOf } from '../slicer/mesh.js';
+import { ZipLimitError, unzipLimited } from '../zip.js';
 
 export class ThingiverseError extends Error {
   constructor(
@@ -22,8 +22,11 @@ export class ThingiverseError extends Error {
 const SETTINGS_KEY = 'thingiverse';
 const CACHE_MS = 5 * 60 * 1000;
 const PER_PAGE = 24;
+/** Models taken from one archive; more are skipped. */
+const MAX_ZIP_MODELS = 30;
 /** Images are proxied (our CSP only allows same-origin images), but only from Thingiverse. */
 const IMAGE_HOSTS = /(^|\.)thingiverse\.com$/i;
+const RASTER_TYPES = /^image\/(jpeg|png|gif|webp|avif)\b/i;
 
 type Json = Record<string, unknown>;
 
@@ -176,15 +179,21 @@ export class ThingiverseService {
       let entries: [string, Uint8Array][];
       if (/\.zip$/i.test(file.name)) {
         try {
-          entries = Object.entries(unzipSync(new Uint8Array(buf))).filter(([n]) => formatOf(n) && !n.startsWith('__MACOSX/'));
-        } catch {
+          const unpacked = await unzipLimited(new Uint8Array(buf), {
+            maxBytes: this.cfg.maxModelBytes,
+            maxFiles: MAX_ZIP_MODELS,
+            accept: (n) => !!formatOf(n) && !n.startsWith('__MACOSX/'),
+          });
+          entries = Object.entries(unpacked);
+        } catch (err) {
+          if (err instanceof ZipLimitError) throw new ThingiverseError(`${file.name}: ${err.message}`, 413);
           throw new ThingiverseError(`${file.name} ist kein gültiges ZIP-Archiv`, 400);
         }
       } else {
         entries = [[file.name, new Uint8Array(buf)]];
       }
       if (!entries.length) throw new ThingiverseError(`${file.name} enthält keine STL-, 3MF- oder OBJ-Dateien`, 400);
-      for (const [name, data] of entries.slice(0, 30)) {
+      for (const [name, data] of entries) {
         const tmp = path.join(this.cfg.tmpDir, `${randomUUID()}.model`);
         try {
           fs.mkdirSync(this.cfg.tmpDir, { recursive: true });
@@ -243,7 +252,8 @@ export class ThingiverseService {
       throw new ThingiverseError('Bild nicht erreichbar');
     }
     const type = res.headers.get('content-type') ?? '';
-    if (!res.ok || !res.body || !type.startsWith('image/')) throw new ThingiverseError('Bild nicht verfügbar', 404);
+    // Raster images only: an SVG served from our origin could carry script.
+    if (!res.ok || !res.body || !RASTER_TYPES.test(type)) throw new ThingiverseError('Bild nicht verfügbar', 404);
     return res;
   }
 

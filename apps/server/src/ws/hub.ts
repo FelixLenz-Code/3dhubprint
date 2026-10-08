@@ -1,10 +1,10 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { ServerMessage } from '@printhub/shared';
 import type { PrinterManager } from '../printers/manager.js';
 import type { AuthService } from '../auth/service.js';
 import type { SlicingService } from '../slicer/service.js';
-import { SESSION_COOKIE } from '../auth/plugin.js';
+import { SESSION_COOKIE, originAllowed } from '../auth/plugin.js';
 
 const REVALIDATE_MS = 60_000;
 const PING_MS = 25_000;
@@ -28,7 +28,12 @@ export async function wsHub(
   slicing.on('job_removed', (id) => broadcast({ type: 'job_removed', id }));
   manager.on('changed', () => broadcast({ type: 'snapshot', printers: manager.list() }));
 
-  app.get('/ws', { websocket: true, preValidation: app.requireAuth }, (socket, req) => {
+  // Browsers send their Origin with every websocket handshake; pages of other sites get nothing.
+  const sameOrigin = async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!req.headers.origin || !originAllowed(req)) return reply.code(403).send({ error: 'csrf', message: 'Ungültige Anfrage-Herkunft' });
+  };
+
+  app.get('/ws', { websocket: true, preValidation: [sameOrigin, app.requireAuth] }, (socket, req) => {
     const token = req.cookies[SESSION_COOKIE]!;
     clients.add(socket);
     socket.send(JSON.stringify({ type: 'snapshot', printers: manager.list() } satisfies ServerMessage));

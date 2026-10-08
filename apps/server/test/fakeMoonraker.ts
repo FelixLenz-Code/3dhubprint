@@ -14,6 +14,8 @@ export interface Call {
 export class FakeMoonraker {
   calls: Call[] = [];
   uploads: { fields: Record<string, string>; filename: string; content: string }[] = [];
+  /** What Moonraker answers to an upload with print=true (job_queue setups queue instead). */
+  printOnUpload: 'start' | 'queue' | 'refuse' = 'start';
   status: Record<string, Record<string, unknown>> = {
     webhooks: { state: 'ready' },
     print_stats: { state: 'standby', filename: '', print_duration: 0, total_duration: 0, filament_used: 0, info: {} },
@@ -153,7 +155,17 @@ export class FakeMoonraker {
         }
         this.uploads.push({ fields, filename, content });
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ result: { item: { path: filename, root: 'gcodes' }, action: 'create_file' } }));
+        const print = fields.print === 'true';
+        res.end(
+          JSON.stringify({
+            result: {
+              item: { path: filename, root: 'gcodes' },
+              print_started: print && this.printOnUpload === 'start',
+              print_queued: print && this.printOnUpload === 'queue',
+              action: 'create_file',
+            },
+          }),
+        );
       });
       return;
     }

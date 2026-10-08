@@ -61,7 +61,8 @@ interface PrinterCheck {
   notified: boolean;
   nextAt: number;
   rejectedUntil: number;
-  running: boolean;
+  /** The check under way, shared by everyone who asks meanwhile. */
+  inflight?: Promise<BedCheckResult>;
 }
 
 /**
@@ -203,8 +204,17 @@ export class BedCheckService {
     if (!s.region) throw new BedCheckError('Zuerst den Bereich des Druckbetts im Kamerabild markieren');
     if (!this.references(printerId).length) throw new BedCheckError('Zuerst ein Bild des leeren Druckbetts speichern');
     const c = this.check(printerId);
-    if (c.running) return c.last ?? { verdict: 'error', at: Date.now(), error: 'Prüfung läuft bereits' };
-    c.running = true;
+    if (c.inflight) return c.inflight;
+    const p = this.look(printerId, s).finally(() => {
+      if (c.inflight === p) c.inflight = undefined;
+    });
+    c.inflight = p;
+    return p;
+  }
+
+  /** One check against the current camera image. Never throws. */
+  private async look(printerId: number, s: BedCheckSettings): Promise<BedCheckResult> {
+    const c = this.check(printerId);
     try {
       const img = decodeJpeg(await this.snapshot(printerId));
       return await this.evaluate(printerId, s, img);
@@ -215,7 +225,6 @@ export class BedCheckService {
       this.publish(printerId);
       return c.last;
     } finally {
-      c.running = false;
       c.nextAt = Date.now() + CHECK_INTERVAL_MS;
     }
   }
@@ -227,9 +236,10 @@ export class BedCheckService {
   async allowsStart(printerId: number): Promise<boolean> {
     const s = this.settings(printerId);
     if (s.mode === 'off' || !s.region || !this.references(printerId).length) return true;
-    // A routine check may be under way; wait for it so this one uses a fresh image.
-    const c = this.check(printerId);
-    for (let i = 0; c.running && i < 100; i++) await new Promise((r) => setTimeout(r, 100));
+    // A routine check may be under way with an older image: let it finish, then look again.
+    // (A check that started after this point is fresh enough to share.)
+    const pending = this.check(printerId).inflight;
+    if (pending) await pending;
     const result = await this.run(printerId);
     if (result.verdict === 'clear') return true;
     this.log.info({ printer: printerId, verdict: result.verdict, error: result.error }, 'bed check: queued start held back');
@@ -299,7 +309,7 @@ export class BedCheckService {
         }
         continue;
       }
-      if (c.running || now < c.nextAt) continue;
+      if (c.inflight || now < c.nextAt) continue;
       const s = this.settings(p.id);
       if (s.mode === 'off' || !s.region || !this.references(p.id).length) continue;
       await this.run(p.id);
@@ -347,7 +357,7 @@ export class BedCheckService {
   private check(printerId: number): PrinterCheck {
     let c = this.checks.get(printerId);
     if (!c) {
-      c = { last: null, streak: 0, suggestClear: false, notified: false, nextAt: 0, rejectedUntil: 0, running: false };
+      c = { last: null, streak: 0, suggestClear: false, notified: false, nextAt: 0, rejectedUntil: 0 };
       this.checks.set(printerId, c);
     }
     return c;

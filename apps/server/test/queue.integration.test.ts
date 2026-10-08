@@ -200,4 +200,29 @@ describe('print queue', { timeout: 20_000 }, () => {
   it('rejects enqueueing jobs that are not sliced', async () => {
     expect((await api('/api/jobs/99999/enqueue', { body: {} })).status).toBe(404);
   });
+
+  it('does not report a print as running when Moonraker only queued the file', async () => {
+    fake.update({ print_stats: { state: 'standby', filename: '' } });
+    await until(async () => (await printer()).status.printState === 'standby');
+    const id = await slicedJob();
+    fake.printOnUpload = 'queue';
+    try {
+      const r = await api(`/api/jobs/${id}/send`, { body: { print: true } });
+      expect(r.status).toBe(409);
+      expect(r.body.message).toMatch(/job_queue/);
+      expect(await job(id)).toMatchObject({ status: 'uploaded' });
+    } finally {
+      fake.printOnUpload = 'start';
+    }
+  });
+
+  it('takes the queue of a deleted printer out of waiting', async () => {
+    // Printing: nothing gets started from the queue meanwhile.
+    fake.update({ print_stats: { state: 'printing', filename: 'other.gcode' } });
+    await until(async () => (await printer()).status.printState === 'printing');
+    const id = await slicedJob();
+    expect((await api(`/api/jobs/${id}/enqueue`, { body: {} })).body).toMatchObject({ status: 'waiting' });
+    expect((await api(`/api/printers/${printerId}`, { method: 'DELETE' })).status).toBe(200);
+    expect(await job(id)).toMatchObject({ status: 'sliced', queuePosition: null, error: 'Der Drucker wurde entfernt' });
+  });
 });

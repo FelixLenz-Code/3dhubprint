@@ -14,9 +14,24 @@ export const DEFAULT_NOTIFICATION_EVENTS: NotificationEvent[] = ['print_done', '
 
 const eventSchema = z.enum(Object.keys(NOTIFICATION_EVENTS) as [NotificationEvent, ...NotificationEvent[]]);
 
+/**
+ * Push services of the browsers (Chrome/Edge/Opera via FCM, Firefox, Safari, legacy Edge).
+ * The server posts to the endpoint, so it must not be just any address.
+ */
+const PUSH_HOSTS = /(^|\.)(googleapis\.com|mozilla\.com|push\.apple\.com|notify\.windows\.com)$/i;
+
+export function isPushEndpoint(endpoint: string): boolean {
+  try {
+    const u = new URL(endpoint);
+    return u.protocol === 'https:' && PUSH_HOSTS.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export const pushSubscribeSchema = z.object({
   subscription: z.object({
-    endpoint: z.string().url().max(2048),
+    endpoint: z.string().url().max(2048).refine(isPushEndpoint, 'Unbekannter Push-Dienst'),
     keys: z.object({ p256dh: z.string().min(1).max(256), auth: z.string().min(1).max(256) }),
   }),
   events: z.array(eventSchema).default(DEFAULT_NOTIFICATION_EVENTS),

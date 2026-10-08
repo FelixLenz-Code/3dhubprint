@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { unzipSync, strFromU8 } from 'fflate';
+import { strFromU8 } from 'fflate';
+import { ZipLimitError, unzipLimitedSync } from '../zip.js';
 import { BED_TYPES, type SliceOverrides } from '@printhub/shared';
 import { printableArea } from './gcodePreview.js';
 
@@ -97,6 +98,9 @@ export interface UploadedPreset {
   data: Json;
 }
 
+const MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
+const MAX_BUNDLE_FILES = 500;
+
 /** Extracts preset JSONs from plain .json uploads and Orca bundles (.orca_printer/.orca_filament/.zip). */
 export function readUpload(filename: string, buf: Buffer): UploadedPreset[] {
   if (/\.json$/i.test(filename)) {
@@ -105,12 +109,16 @@ export function readUpload(filename: string, buf: Buffer): UploadedPreset[] {
   if (/\.(orca_printer|orca_filament|zip)$/i.test(filename)) {
     let entries: Record<string, Uint8Array>;
     try {
-      entries = unzipSync(new Uint8Array(buf));
-    } catch {
+      entries = unzipLimitedSync(new Uint8Array(buf), {
+        maxBytes: MAX_BUNDLE_BYTES,
+        maxFiles: MAX_BUNDLE_FILES,
+        accept: (name) => name.endsWith('.json') && !name.endsWith('bundle_structure.json'),
+      });
+    } catch (err) {
+      if (err instanceof ZipLimitError) throw new ProfileError(`${filename}: ${err.message}`);
       throw new ProfileError(`${filename}: keine gültige ZIP-/Bundle-Datei`);
     }
     return Object.entries(entries)
-      .filter(([name]) => name.endsWith('.json') && !name.endsWith('bundle_structure.json'))
       .map(([name, bytes]) => ({ file: `${filename}/${name}`, data: parseJson(name, strFromU8(bytes)) }));
   }
   throw new ProfileError(`${filename}: nur .json, .orca_printer, .orca_filament oder .zip werden unterstützt`);
@@ -309,6 +317,18 @@ export function isCompatible(settings: Json, machine: { name: string; systemPrin
  * system printer, and process/filament declare compatibility with both names. The bed type
  * picks the filament's plate temperature.
  */
+/**
+ * Settings that make the slicer run programs on this server (Orca's post-processing scripts).
+ * Profiles come from anywhere (downloads, other people), so they never get that far.
+ */
+const SCRIPT_KEYS = ['post_process'];
+
+export function withoutScripts(settings: Json): Json {
+  const out = { ...settings };
+  for (const k of SCRIPT_KEYS) delete out[k];
+  return out;
+}
+
 export function cliProfiles(
   machine: { name: string; settings: Json; systemPrinter: string },
   process: Json,
@@ -316,12 +336,13 @@ export function cliProfiles(
   bedType?: string,
 ) {
   const compat = [machine.name, machine.systemPrinter];
-  const forCli = (s: Json) => ({ ...s, compatible_printers: compat, compatible_printers_condition: '', compatible_prints: [], compatible_prints_condition: '' });
+  const forCli = (s: Json) => ({ ...withoutScripts(s), compatible_printers: compat, compatible_printers_condition: '', compatible_prints: [], compatible_prints_condition: '' });
   // The plate is a GUI/project setting; without it the CLI slices for the Cool Plate.
   const plate = bedType ? { curr_bed_type: bedType } : {};
   return {
-    machine: { ...machine.settings, name: machine.name, inherits: machine.systemPrinter, ...plate },
-    process: { ...forCli(process), ...plate },
+    machine: { ...withoutScripts(machine.settings), name: machine.name, inherits: machine.systemPrinter, ...plate },
+    // Explicitly empty, so nothing inherited from a system preset runs either.
+    process: { ...forCli(process), ...plate, post_process: [] },
     filament: forCli(filament),
   };
 }

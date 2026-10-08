@@ -225,7 +225,17 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
       this.klippyMessage = 'Klipper nicht mit Moonraker verbunden';
     }
     this.setConnection('klippy_not_ready');
-    this.klippyTimer = setTimeout(() => void this.checkKlippy().catch(() => {}), KLIPPY_POLL_MS);
+    this.klippyTimer = setTimeout(() => this.pollKlippy(), KLIPPY_POLL_MS);
+  }
+
+  /** checkKlippy that keeps trying while connected: one failed request must not end the polling. */
+  private pollKlippy() {
+    this.checkKlippy().catch((err) => {
+      if (this.stopped || this.ws?.readyState !== WebSocket.OPEN) return;
+      this.log.warn({ url: this.baseUrl, err: (err as Error).message }, 'klippy check failed, retrying');
+      clearTimeout(this.klippyTimer);
+      this.klippyTimer = setTimeout(() => this.pollKlippy(), KLIPPY_POLL_MS);
+    });
   }
 
   private async subscribe() {
@@ -310,12 +320,12 @@ export class MoonrakerClient extends EventEmitter<MoonrakerEvents> {
         break;
       }
       case 'notify_klippy_ready':
-        void this.checkKlippy().catch(() => {});
+        this.pollKlippy();
         break;
       case 'notify_klippy_shutdown':
       case 'notify_klippy_disconnected':
         this.klippyState = msg.method === 'notify_klippy_shutdown' ? 'shutdown' : 'disconnected';
-        void this.checkKlippy().catch(() => {});
+        this.pollKlippy();
         break;
       case 'notify_gcode_response':
         for (const line of (msg.params as string[] | undefined) ?? []) this.emit('gcode', line);

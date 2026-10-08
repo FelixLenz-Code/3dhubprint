@@ -18,7 +18,7 @@ function AuthShell({ title, subtitle, children }: { title: string; subtitle: str
   );
 }
 
-export function SetupPage() {
+export function SetupPage({ fromLan }: { fromLan: boolean }) {
   const refreshAuth = useRefreshAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -43,6 +43,14 @@ export function SetupPage() {
 
   return (
     <AuthShell title="Willkommen bei PrintHub" subtitle="Lege das Administrator-Konto an.">
+      {!fromLan && (
+        <div className="mb-4">
+          <Alert tone="warning">
+            Aus Sicherheitsgründen lässt sich das erste Konto nur aus dem lokalen Netz anlegen. Bitte PrintHub im LAN direkt
+            über http://&lt;server-ip&gt;:8080 öffnen.
+          </Alert>
+        </div>
+      )}
       <form onSubmit={submit} className="space-y-4">
         <Field label="Benutzername">
           <Input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required minLength={3} autoFocus />
@@ -54,7 +62,7 @@ export function SetupPage() {
           <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
         </Field>
         {error && <Alert>{error}</Alert>}
-        <Button type="submit" loading={busy} className="w-full">
+        <Button type="submit" loading={busy} disabled={!fromLan} className="w-full">
           Konto anlegen
         </Button>
       </form>

@@ -113,8 +113,11 @@ export class NotificationService {
   }
 
   /** Sends to all devices that want `event` (or, for tests, only to one endpoint). */
-  async send(event: NotificationEvent | 'test', payload: PushPayload, onlyEndpoint?: string): Promise<number> {
-    const subs = this.db.select().from(pushSubscriptions).all();
+  async send(event: NotificationEvent | 'test', payload: PushPayload, only?: { endpoint: string; userId: number }): Promise<number> {
+    const onlyEndpoint = only?.endpoint;
+    const subs = only
+      ? this.db.select().from(pushSubscriptions).where(eq(pushSubscriptions.userId, only.userId)).all()
+      : this.db.select().from(pushSubscriptions).all();
     let sent = 0;
     await Promise.all(
       subs.map(async (s) => {

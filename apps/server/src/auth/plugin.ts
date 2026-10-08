@@ -71,7 +71,7 @@ export const authPlugin = fp(async (app: FastifyInstance, opts: { auth: AuthServ
   });
 });
 
-function originAllowed(req: FastifyRequest): boolean {
+export function originAllowed(req: FastifyRequest): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
   if (config.PUBLIC_URL && origin === new URL(config.PUBLIC_URL).origin) return true;

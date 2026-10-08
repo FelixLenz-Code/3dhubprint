@@ -38,7 +38,7 @@ export function App() {
       </div>
     );
   }
-  if (data.state === 'setup_required') return <SetupPage />;
+  if (data.state === 'setup_required') return <SetupPage fromLan={data.fromLan} />;
   if (data.state === 'anonymous') return <LoginPage />;
 
   return (

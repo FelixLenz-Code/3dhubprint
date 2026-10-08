@@ -148,9 +148,9 @@ export async function buildApp() {
   if (fs.existsSync(path.join(webDist, 'index.html'))) {
     await app.register(fastifyStatic, {
       root: webDist,
-      setHeaders(res, filePath) {
+      setHeaders(reply, filePath) {
         // Hashed assets never change; everything else (index.html, sw.js, manifest) must revalidate.
-        res.setHeader(
+        reply.header(
           'cache-control',
           filePath.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
         );

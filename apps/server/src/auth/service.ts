@@ -11,8 +11,16 @@ import {
   verifyTotp,
 } from './totp.js';
 import type { Me, SessionInfo } from '@printhub/shared';
+import { isPrivateIp } from '../net.js';
 
-const MAX_FAILED_LOGINS = 5;
+/** Failed logins from one address before that address is locked out of the account. */
+const MAX_FAILED_PER_IP = 5;
+/**
+ * Failed logins from anywhere before the account is locked for outside addresses too (attacks
+ * spread over many addresses). The local network can always log in, so nobody can lock the
+ * owner out from the internet.
+ */
+const MAX_FAILED_TOTAL = 20;
 const LOCKOUT_MS = 15 * 60 * 1000;
 const SESSION_TOUCH_INTERVAL_MS = 60 * 1000;
 
@@ -24,6 +32,7 @@ export class AuthError extends Error {
       | 'invalid_code'
       | 'locked'
       | 'setup_done'
+      | 'setup_not_local'
       | 'totp_not_pending'
       | 'totp_already_enabled'
       | 'totp_not_enabled',
@@ -42,6 +51,9 @@ export interface RequestMeta {
 }
 
 export class AuthService {
+  /** Failed logins per account and address: `${userId}|${ip}`. */
+  private readonly ipFailures = new Map<string, { count: number; lockedUntil: number }>();
+
   constructor(
     private readonly db: Db,
     private readonly box: SecretBox,
@@ -80,7 +92,9 @@ export class AuthService {
     }
 
     const now = Date.now();
-    if (user.lockedUntil && user.lockedUntil > now) {
+    const fromLan = !!meta.ip && isPrivateIp(meta.ip);
+    const ipLock = this.ipFailures.get(ipKey(user.id, meta.ip));
+    if ((ipLock && ipLock.lockedUntil > now) || (!fromLan && user.lockedUntil && user.lockedUntil > now)) {
       throw new AuthError('locked', 'Konto vorübergehend gesperrt. Bitte später erneut versuchen.', 429);
     }
 
@@ -99,6 +113,7 @@ export class AuthService {
     }
 
     this.db.update(users).set({ failedLogins: 0, lockedUntil: null }).where(eq(users.id, user.id)).run();
+    this.ipFailures.delete(ipKey(user.id, meta.ip));
     this.audit(user.id, 'login', null, meta);
     return user;
   }
@@ -289,13 +304,25 @@ export class AuthService {
   }
 
   private registerFailure(user: UserRow, meta: RequestMeta, reason: string) {
+    const now = Date.now();
+    const key = ipKey(user.id, meta.ip);
+    const prev = this.ipFailures.get(key);
+    const count = (prev && prev.lockedUntil <= now ? prev.count : 0) + 1;
+    const ipLocked = count >= MAX_FAILED_PER_IP;
+    this.ipFailures.set(key, { count: ipLocked ? 0 : count, lockedUntil: ipLocked ? now + LOCKOUT_MS : 0 });
+    if (this.ipFailures.size > 10_000) {
+      for (const [k, v] of this.ipFailures) if (v.lockedUntil <= now) this.ipFailures.delete(k);
+    }
+
     const failed = user.failedLogins + 1;
-    const lock = failed >= MAX_FAILED_LOGINS;
+    const lock = failed >= MAX_FAILED_TOTAL;
     this.db
       .update(users)
-      .set({ failedLogins: lock ? 0 : failed, lockedUntil: lock ? Date.now() + LOCKOUT_MS : user.lockedUntil })
+      .set({ failedLogins: lock ? 0 : failed, lockedUntil: lock ? now + LOCKOUT_MS : user.lockedUntil })
       .where(eq(users.id, user.id))
       .run();
-    this.audit(user.id, lock ? 'account_locked' : 'login_failed', reason, meta);
+    this.audit(user.id, lock ? 'account_locked' : ipLocked ? 'login_locked_ip' : 'login_failed', reason, meta);
   }
 }
+
+const ipKey = (userId: number, ip: string | null) => `${userId}|${ip ?? '?'}`;

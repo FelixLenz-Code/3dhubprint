@@ -33,7 +33,7 @@ export async function pushRoutes(app: FastifyInstance, { push }: { push: Notific
 
   app.post('/test', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req) => {
     const { endpoint } = z.object({ endpoint: z.string().url() }).parse(req.body);
-    const sent = await push.send('test', { title: '🔔 PrintHub', body: 'Benachrichtigungen funktionieren.', url: '/settings/notifications', tag: 'test' }, endpoint);
+    const sent = await push.send('test', { title: '🔔 PrintHub', body: 'Benachrichtigungen funktionieren.', url: '/settings/notifications', tag: 'test' }, { endpoint, userId: req.auth!.user.id });
     return { sent };
   });
 }

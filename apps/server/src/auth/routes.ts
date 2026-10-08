@@ -9,17 +9,22 @@ import {
 } from '@printhub/shared';
 import { AuthError, type AuthService } from './service.js';
 import { clearSessionCookie, requestMeta, setSessionCookie } from './plugin.js';
+import { fromLocalNetwork } from '../net.js';
 
 export async function authRoutes(app: FastifyInstance, { auth }: { auth: AuthService }) {
   const strictLimit = { rateLimit: { max: 10, timeWindow: '1 minute' } };
 
   app.get('/state', async (req): Promise<AuthState> => {
-    if (auth.needsSetup()) return { state: 'setup_required' };
+    if (auth.needsSetup()) return { state: 'setup_required', fromLan: fromLocalNetwork(req) };
     if (!req.auth) return { state: 'anonymous' };
     return { state: 'authenticated', user: auth.toMe(req.auth.user) };
   });
 
   app.post('/setup', { config: strictLimit }, async (req, reply) => {
+    // Until the admin account exists, anyone reaching the page could claim it: only from the LAN.
+    if (!fromLocalNetwork(req)) {
+      throw new AuthError('setup_not_local', 'Die Ersteinrichtung ist nur aus dem lokalen Netz möglich. Bitte PrintHub im LAN direkt über http://<server-ip>:8080 öffnen.', 403);
+    }
     const body = setupSchema.parse(req.body);
     const meta = requestMeta(req);
     const user = await auth.setup(body.username, body.password, meta);

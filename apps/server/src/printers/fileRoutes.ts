@@ -10,7 +10,7 @@ import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
 import { PrinterControl } from './control.js';
 import type { MoonrakerClient } from './moonraker.js';
-import { UploadError, uploadToPrinter } from './upload.js';
+import { UploadError, notStartedReason, uploadToPrinter, type UploadResult } from './upload.js';
 
 const idParams = z.object({ id: z.coerce.number().int().positive() });
 const GCODE_EXT = /\.(gcode|gco|g|bgcode)$/i;
@@ -152,16 +152,17 @@ export async function fileRoutes(
           }
         }
 
-        let target: string;
+        let up: UploadResult;
         try {
-          target = await uploadToPrinter(ctx.client, tmp, filename, { folder, print });
+          up = await uploadToPrinter(ctx.client, tmp, filename, { folder, print });
         } catch (err) {
           if (!(err instanceof UploadError)) throw err;
           req.log.warn({ status: err.status }, 'moonraker upload failed');
           return reply.code(502).send({ error: 'upload_failed', message: err.message });
         }
-        audit(req, ctx.id, print ? 'upload_print' : 'upload', target);
-        return { ok: true, path: target, printStarted: print };
+        audit(req, ctx.id, up.printStarted ? 'upload_print' : 'upload', up.path);
+        if (print && !up.printStarted) return reply.code(409).send({ error: 'print_not_started', message: notStartedReason(up) });
+        return { ok: true, path: up.path, printStarted: up.printStarted };
       } finally {
         if (tmp) fs.rm(tmp, { force: true }, () => {});
       }

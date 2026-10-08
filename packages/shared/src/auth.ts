@@ -57,6 +57,7 @@ export interface SessionInfo {
 }
 
 export type AuthState =
-  | { state: 'setup_required' }
+  /** fromLan: the first account can only be created from the local network. */
+  | { state: 'setup_required'; fromLan: boolean }
   | { state: 'anonymous' }
   | { state: 'authenticated'; user: Me };

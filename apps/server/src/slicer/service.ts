@@ -23,7 +23,7 @@ import type { Db } from '../db/index.js';
 import { jobModels, jobs, models, printerProfiles, printers, slicerProfiles } from '../db/schema.js';
 import type { PrinterManager } from '../printers/manager.js';
 import type { PrintEvent } from '../printers/events.js';
-import { uploadToPrinter } from '../printers/upload.js';
+import { notStartedReason, uploadToPrinter } from '../printers/upload.js';
 import {
   ProfileError,
   SystemProfiles,
@@ -34,6 +34,7 @@ import {
   readUpload,
   resolvePreset,
   summarize,
+  withoutScripts,
   type UploadedPreset,
 } from './profiles.js';
 import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail, type Mesh } from './mesh.js';
@@ -96,6 +97,7 @@ export class SlicingService extends EventEmitter<Events> {
   ) {
     super();
     manager.on('print', (e) => void this.onPrintEvent(e));
+    manager.on('removing', (printerId) => this.onPrinterRemoved(printerId));
     this.dirs = {
       models: path.join(cfg.dataDir, 'models'),
       thumbs: path.join(cfg.dataDir, 'thumbs'),
@@ -169,6 +171,7 @@ export class SlicingService extends EventEmitter<Events> {
         result.skipped.push({ file: p.file, reason: err.message });
         continue;
       }
+      resolved = { ...resolved, settings: withoutScripts(resolved.settings) };
       const settingsJson = JSON.stringify(resolved.settings);
       const current = this.currentProfile(p.kind, resolved.name);
       if (current && current.settings === settingsJson) {
@@ -591,19 +594,24 @@ export class SlicingService extends EventEmitter<Events> {
     this.promoteDraft(j, false);
     const before = j.status;
     this.update(id, { status: 'uploading', error: null });
+    let up;
     try {
-      const printerPath = await uploadToPrinter(client, j.gcodePath, j.gcodeName, { print });
-      this.update(id, {
-        status: print ? 'printing' : 'uploaded',
-        printerPath,
-        finishedAt: null,
-        ...(print || before === 'waiting' ? { queuePosition: null } : {}),
-      });
-      if (j.printerId && before === 'waiting') this.renumberQueue(j.printerId);
+      up = await uploadToPrinter(client, j.gcodePath, j.gcodeName, { print });
     } catch (err) {
       this.update(id, { status: before, error: (err as Error).message });
       throw new SlicingError((err as Error).message, 502);
     }
+    const notStarted = print && !up.printStarted;
+    this.update(id, {
+      status: up.printStarted ? 'printing' : 'uploaded',
+      printerPath: up.path,
+      finishedAt: null,
+      error: notStarted ? notStartedReason(up) : null,
+      ...(print || before === 'waiting' ? { queuePosition: null } : {}),
+    });
+    if (j.printerId && before === 'waiting') this.renumberQueue(j.printerId);
+    // The file is on the printer, but nothing prints: tell the caller (and the queue) so.
+    if (notStarted) throw new SlicingError(notStartedReason(up), 409);
     return this.getJob(id)!;
   }
 
@@ -757,6 +765,17 @@ export class SlicingService extends EventEmitter<Events> {
     }
   }
 
+  /** Its queue can never start and its running print can no longer be followed. */
+  private onPrinterRemoved(printerId: number) {
+    for (const j of this.db.select().from(jobs).where(eq(jobs.printerId, printerId)).all()) {
+      if (j.status === 'waiting') {
+        this.update(j.id, { status: 'sliced', queuePosition: null, error: 'Der Drucker wurde entfernt' });
+      } else if (j.status === 'printing') {
+        this.update(j.id, { status: 'done', finishedAt: Date.now(), error: 'Der Drucker wurde entfernt, Ende des Drucks nicht erfasst' });
+      }
+    }
+  }
+
   waitingCount(printerId: number): number {
     return (
       this.db
@@ -881,6 +900,13 @@ export class SlicingService extends EventEmitter<Events> {
       );
       const gcodePath = path.join(this.dirs.gcode, `job-${job.id}.gcode`);
       await fs.promises.rename(out.gcodePath, gcodePath);
+      if (!this.jobRow(job.id)) {
+        // Deleted while the preview was rendered (after Orca had finished): leave nothing behind.
+        for (const f of [gcodePath, this.previewPath(job.id, 'top'), this.previewPath(job.id, 'iso'), this.pathsFile(job.id)]) {
+          fs.rmSync(f, { force: true });
+        }
+        return;
+      }
       this.log.info({ job: job.id, ms: Date.now() - started }, 'sliced');
       this.update(job.id, {
         status: 'sliced',

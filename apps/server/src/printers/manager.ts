@@ -18,6 +18,8 @@ interface ManagerEvents {
   print: [PrintEvent];
   /** Moonraker's Spoolman integration changed the active spool. */
   spool: [number, number | null];
+  /** A printer is about to be deleted (its rows still exist). */
+  removing: [number];
   changed: [];
 }
 
@@ -112,6 +114,7 @@ export class PrinterManager extends EventEmitter<ManagerEvents> {
   remove(id: number): boolean {
     if (!this.rows.has(id)) return false;
     this.stopClient(id);
+    this.emit('removing', id);
     this.db.delete(printers).where(eq(printers.id, id)).run();
     this.rows.delete(id);
     this.emit('changed');

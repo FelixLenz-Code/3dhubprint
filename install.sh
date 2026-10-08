@@ -9,6 +9,7 @@
 #   --channel stable|edge     Releases (default) or the latest main branch
 #   --version X.Y.Z           Install a specific release
 #   --port N                  Host port (default 8080)
+#   --bind IP                 Listen only on this host address, e.g. the LAN IP (default: all)
 #   --public-url URL          Public HTTPS address behind the reverse proxy
 #   --trusted-proxies IPS     Reverse proxy IP(s), comma-separated
 #   --source                  Build locally instead of pulling the prebuilt image

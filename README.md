@@ -218,8 +218,12 @@ curl -fsSL https://raw.githubusercontent.com/FelixLenz-Code/3dhubprint/main/inst
   --yes --public-url https://drucker.example.de --trusted-proxies 192.168.1.5 --auto-update --spoolman
 ```
 
-Danach die Adresse öffnen, das Admin-Konto anlegen und **sofort unter Einstellungen → Sicherheit
-die 2FA aktivieren**.
+Danach PrintHub **im LAN** unter `http://<server-ip>:8080` öffnen, das Admin-Konto anlegen und
+**sofort unter Einstellungen → Sicherheit die 2FA aktivieren**. Das erste Konto lässt sich nur aus
+dem lokalen Netz anlegen, nicht über die öffentliche Adresse.
+
+Mit `--bind <lan-ip>` lauschen PrintHub und Spoolman nur auf dieser Adresse statt auf allen
+Netzwerkschnittstellen (z. B. wenn der Server auch in einem VPN oder einem zweiten Netz hängt).
 
 **Empfohlene VM:** 4 vCPU (CPU-Typ `host`), 6–8 GB RAM, 32 GB System + 100 GB Daten.
 Das Image ist wegen OrcaSlicer ca. 1,2 GB groß. Im Leerlauf braucht PrintHub nur wenige
@@ -302,10 +306,16 @@ Hinweise:
 - Sessions: zufälliges Token im `HttpOnly; Secure; SameSite=Strict`-Cookie (`__Host-`-Präfix),
   in der DB nur als SHA-256; gleitende Laufzeit 30 Tage; einzeln widerrufbar
 - 2FA: TOTP mit Replay-Schutz und 10 Einmal-Wiederherstellungscodes
-- Brute-Force: Sperre nach 5 Fehlversuchen für 15 Minuten, Rate-Limit 10/min auf Login-Routen
+- Ersteinrichtung (Admin-Konto anlegen) nur aus dem lokalen Netz
+- Brute-Force: nach 5 Fehlversuchen ist die jeweilige IP 15 Minuten gesperrt; nach 20 Fehlversuchen
+  insgesamt das ganze Konto, aber nur für Zugriffe von außen (aus dem LAN klappt die Anmeldung
+  weiterhin, niemand kann dich aus dem Internet aussperren); Rate-Limit 10/min auf Login-Routen
 - CSRF: Pflicht-Header `x-printhub-request` + Origin-Prüfung für alle schreibenden Anfragen
 - CSP und weitere Header über helmet; Audit-Log für Anmeldungen und Sicherheitsänderungen
 - Drucker-API-Keys AES-256-GCM-verschlüsselt
+- Importierte Slicer-Profile: Nachbearbeitungs-Skripte (`post_process`) werden entfernt, damit
+  ein Profil aus dem Internet keine Programme auf dem Server starten kann
+- ZIP-Archive (Thingiverse, Profil-Bundles) werden nur bis zu einer festen entpackten Größe gelesen
 
 ## Entwicklung
 
