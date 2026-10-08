@@ -149,10 +149,11 @@ export async function slicerRoutes(
           }
         }
         if (!tmp || !filename) throw new SlicingError('Keine Datei übergeben');
-        const model = await slicing.addModel(filename, tmp, { name: fields.name?.trim() || undefined });
-        audit(req, 'model.add', `#${model.id} ${model.filename}`);
+        // Several models when a slicer project has more than one plate.
+        const added = await slicing.addModel(filename, tmp, { name: fields.name?.trim() || undefined });
+        audit(req, 'model.add', `${added.map((m) => `#${m.id}`).join(',')} ${filename}`);
         reply.code(201);
-        return model;
+        return added;
       } finally {
         if (tmp) fs.rm(tmp, { force: true }, () => {});
       }

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { JobInfo } from '@printhub/shared';
 import { buildApp } from '../src/app.js';
+import { bambuProject, plainTwoParts } from './threemfFixtures.js';
 import { FakeMoonraker } from './fakeMoonraker.js';
 
 const USER_FIX = path.resolve(import.meta.dirname, '../../../fixtures/orca-2.4.2/user/ender3s1plus');
@@ -151,9 +152,9 @@ describe('models and jobs', () => {
     };
     const r = await api('/api/models', { form: form() });
     expect(r.status).toBe(201);
-    expect(r.body).toMatchObject({ name: 'Würfel 20mm', format: 'stl', triangles: 12, dimensions: [20, 20, 20] });
-    modelId = r.body.id;
-    expect((await api('/api/models', { form: form() })).body.id).toBe(modelId);
+    expect(r.body).toEqual([expect.objectContaining({ name: 'Würfel 20mm', format: 'stl', triangles: 12, dimensions: [20, 20, 20] })]);
+    modelId = r.body[0].id;
+    expect((await api('/api/models', { form: form() })).body[0].id).toBe(modelId);
     const thumb = await api(`/api/models/${modelId}/thumbnail`);
     expect(thumb.type).toBe('image/png');
     expect((thumb.body as Buffer).subarray(1, 4).toString()).toBe('PNG');
@@ -241,7 +242,7 @@ describe('models and jobs', () => {
   it('puts several models with overrides on one plate', async () => {
     const f = new FormData();
     f.append('file', new Blob([new Uint8Array(cubeStl(10))]), 'Klein.stl');
-    const small = (await api('/api/models', { form: f })).body.id;
+    const small = (await api('/api/models', { form: f })).body[0].id;
     await api(`/api/printers/${printerId}/profiles`, {
       method: 'PUT',
       body: { machine: 'Tuned (Claude) - Ender-3 S1 Plus 0.4', process: [], filament: [] },
@@ -279,6 +280,41 @@ describe('models and jobs', () => {
     expect(gcode).toContain('; sparse_infill_density = 35%');
     expect(gcode).toContain('; sparse_infill_pattern = gyroid');
   });
+
+  it('keeps plain 3MF parts together and hands slicer projects to Orca as 3MF, one model per plate', async () => {
+    const upload = async (data: Uint8Array, name: string) => {
+      const f = new FormData();
+      f.append('file', new Blob([new Uint8Array(data)]), name);
+      const r = await api('/api/models', { form: f });
+      expect(r.status).toBe(201);
+      return r.body as { id: number; name: string; dimensions: number[] }[];
+    };
+    const slice = async (modelId: number) => {
+      const r = await api('/api/jobs', { body: { items: [{ modelId }], printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA' } });
+      const job = await until(async () => {
+        const j = (await api(`/api/jobs/${r.body.id}`)).body as JobInfo;
+        return j.status === 'sliced' || j.status === 'failed' ? j : undefined;
+      }, 15_000);
+      expect(job.status).toBe('sliced');
+      return (await api(`/api/jobs/${job.id}/gcode`)).body.toString() as string;
+    };
+
+    // A lever inside its frame: Orca would arrange the two build items apart.
+    const [pip, ...rest] = await upload(plainTwoParts(), 'PIP-Schalter.3mf');
+    expect(rest).toEqual([]);
+    expect(pip!.dimensions).toEqual([32, 32, 10]);
+    const plain = await slice(pip!.id);
+    expect(plain).toContain('; models = PIP-Schalter.stl\n');
+    expect(plain).toContain('; bounds = -16,-16,0,16,16,10\n');
+
+    const plates = await upload(bambuProject(), 'Projekt.3mf');
+    expect(plates.map((m) => [m.name, m.dimensions])).toEqual([
+      ['Projekt – Platte 1', [10, 10, 10]], // without the modifier
+      ['Projekt – Platte 2', [20, 20, 20]],
+    ]);
+    expect((await upload(bambuProject(), 'Projekt.3mf')).map((m) => m.id)).toEqual(plates.map((m) => m.id));
+    expect(await slice(plates[1]!.id)).toContain('; models = Projekt _ Platte 2.3mf\n');
+  }, 20_000);
 
   it('enables vase mode with the settings Orca requires, for a single object only', async () => {
     const base = { printerId, process: 'Tuned (Claude) - 0.20mm Standard', filament: 'Tuned (Claude) - PLA', overrides: { vase: true } };
@@ -329,7 +365,7 @@ describe('models and jobs', () => {
   it('bakes manual orientation, scale and bed positions into the parts', async () => {
     const f = new FormData();
     f.append('file', new Blob([new Uint8Array(boxStl(30, 10, 5))]), 'Leiste.stl');
-    const bar = (await api('/api/models', { form: f })).body.id;
+    const bar = (await api('/api/models', { form: f })).body[0].id;
     const mesh = await api(`/api/models/${bar}/mesh`);
     expect(mesh.body.length).toBe(12 * 9 * 4);
 

@@ -37,10 +37,11 @@ import {
   withoutScripts,
   type UploadedPreset,
 } from './profiles.js';
-import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail, type Mesh } from './mesh.js';
+import { MeshError, formatOf, layoutForPreview, meshInfo, parseModel, renderThumbnail, type Mesh, type ModelFormat } from './mesh.js';
+import { IDENTITY, mergedTriangles, plateGroups, read3mf, rewrite3mf, ThreeMfError, type ThreeMf } from './threemf.js';
 import { SliceError, injectThumbnails, runOrca, thumbnailSizes } from './orca.js';
 import { bedFromSettings, renderPlatePreviewOffThread } from './gcodePreview.js';
-import { isIdentity, simplifyForDisplay, transformMesh, writeStl } from './transform.js';
+import { isIdentity, placementMatrix, simplifyForDisplay, transformMesh, writeStl } from './transform.js';
 
 export class SlicingError extends Error {
   constructor(
@@ -282,38 +283,74 @@ export class SlicingService extends EventEmitter<Events> {
   // Models
   // ---------------------------------------------------------------------------
 
-  /** Stores an uploaded model (deduplicated by content) and renders its thumbnail. */
+  /**
+   * Stores an uploaded model (deduplicated by content) and renders its thumbnail. A slicer
+   * project spread over several plates becomes one model per plate.
+   */
   async addModel(
     filename: string,
     tmpPath: string,
     meta: { name?: string; source?: string; sourceUrl?: string; license?: string; author?: string } = {},
-  ): Promise<ModelInfo> {
+  ): Promise<ModelInfo[]> {
     const format = formatOf(filename);
     if (!format) throw new SlicingError('Nur STL-, 3MF- und OBJ-Dateien werden unterstützt');
     const buf = await fs.promises.readFile(tmpPath);
-    const sha256 = createHash('sha256').update(buf).digest('hex');
-    const existing = this.db.select().from(models).where(eq(models.sha256, sha256)).get();
-    if (existing) return this.toModelInfo(existing);
-
+    const name = meta.name ?? filename.replace(/\.[^.]+$/, '');
+    const unreadable = (err: unknown) =>
+      new SlicingError(err instanceof MeshError || err instanceof ThreeMfError ? `${filename}: ${err.message}` : `${filename}: Datei konnte nicht gelesen werden`);
+    if (format === '3mf') {
+      let tm: ThreeMf;
+      try {
+        tm = read3mf(new Uint8Array(buf));
+      } catch (err) {
+        throw unreadable(err);
+      }
+      const plates = tm.project && tm.unit === 1 ? plateGroups(tm) : [];
+      if (plates.length > 1) {
+        const out: ModelInfo[] = [];
+        for (const [i, items] of plates.entries()) {
+          const part = Buffer.from(rewrite3mf(tm, IDENTITY, new Set(items.map((x) => x.objectId))));
+          out.push(await this.storeModel(`${name} – Platte ${i + 1}`, filename, format, part, { triangles: mergedTriangles(tm, items) }, meta));
+        }
+        return out;
+      }
+    }
+    // Checked after the plate split: a project uploaded before it existed is split now.
+    const existing = this.db.select().from(models).where(eq(models.sha256, sha256(buf))).get();
+    if (existing) return [this.toModelInfo(existing)];
     let mesh;
     try {
       mesh = parseModel(format, buf);
     } catch (err) {
-      if (err instanceof MeshError) throw new SlicingError(`${filename}: ${err.message}`);
-      throw new SlicingError(`${filename}: Datei konnte nicht gelesen werden`);
+      throw unreadable(err);
     }
+    return [await this.storeModel(name, filename, format, buf, mesh, meta)];
+  }
+
+  private async storeModel(
+    name: string,
+    filename: string,
+    format: ModelFormat,
+    buf: Buffer,
+    mesh: Mesh,
+    meta: { source?: string; sourceUrl?: string; license?: string; author?: string },
+  ): Promise<ModelInfo> {
+    const hash = sha256(buf);
+    const existing = this.db.select().from(models).where(eq(models.sha256, hash)).get();
+    if (existing) return this.toModelInfo(existing);
+    if (mesh.triangles.length === 0) throw new SlicingError(`${filename}: Das Modell enthält keine Dreiecke`);
     const info = meshInfo(mesh);
-    const storedPath = path.join(this.dirs.models, `${sha256}.${format}`);
-    await fs.promises.copyFile(tmpPath, storedPath);
+    const storedPath = path.join(this.dirs.models, `${hash}.${format}`);
+    await fs.promises.writeFile(storedPath, buf);
     const row = this.db
       .insert(models)
       .values({
-        name: (meta.name ?? filename.replace(/\.[^.]+$/, '')).slice(0, 200),
+        name: name.slice(0, 200),
         filename,
         format,
         storedPath,
         size: buf.length,
-        sha256,
+        sha256: hash,
         triangles: info.triangles,
         sizeX: info.size[0],
         sizeY: info.size[1],
@@ -855,7 +892,7 @@ export class SlicingService extends EventEmitter<Events> {
         this.cfg.orcaBin,
         {
           workDir,
-          models: await this.prepareModels(items, job.arrange, workDir),
+          models: await this.prepareModels(items, job.arrange, workDir, machineSettings),
           autoOrient: job.autoOrient,
           arrange: job.arrange,
           ...cli,
@@ -968,34 +1005,51 @@ export class SlicingService extends EventEmitter<Events> {
    * Input files for Orca. Rotation/scale are baked into a temporary STL; for a manually
    * arranged plate every copy gets its own STL at its bed position (Orca keeps the XY
    * coordinates of unarranged parts and only drops them onto the bed).
+   * Slicer projects (Bambu Studio/Orca, PrusaSlicer) stay 3MF files with the placement written
+   * into them, so modifiers, painted supports and per-object settings survive. Other 3MFs are
+   * one part, as in the preview: Orca would pull their objects apart when arranging.
    */
-  private async prepareModels(items: ReturnType<SlicingService['jobItems']>, arrange: boolean, workDir: string) {
+  private async prepareModels(items: ReturnType<SlicingService['jobItems']>, arrange: boolean, workDir: string, machine: Record<string, unknown>) {
     const out: { path: string; copies: number }[] = [];
     // Orca names objects after the file (Klipper shows them when skipping objects), so keep the model's name.
-    const partFile = async (idx: number, copy: number, name: string, mesh: Mesh) => {
+    const partFile = async (idx: number, copy: number, name: string, ext: 'stl' | '3mf', write: (file: string) => Promise<void>) => {
       const dir = path.join(workDir, 'parts', `${idx}-${copy}`);
       await fs.promises.mkdir(dir, { recursive: true });
-      const file = path.join(dir, `${name.replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 80) || 'modell'}.stl`);
-      await writeStl(mesh, file);
+      const file = path.join(dir, `${name.replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 80) || 'modell'}.${ext}`);
+      await write(file);
       return file;
     };
+    const bed = bedFromSettings(machine).bed;
+    const center: [number, number] = [0, 1].map((k) => (Math.min(...bed.map((p) => p[k]!)) + Math.max(...bed.map((p) => p[k]!))) / 2) as [number, number];
     for (const [idx, i] of items.entries()) {
       const t = i.transform;
-      if (arrange && (!t || isIdentity(t))) {
-        out.push({ path: i.model.storedPath, copies: i.copies });
-        continue;
-      }
-      const mesh = parseModel(i.model.format, await fs.promises.readFile(i.model.storedPath));
       const tr = t ?? { rotation: [0, 0, 0, 1] as ModelTransform['rotation'], scale: 1 };
-      if (arrange) {
-        out.push({ path: await partFile(idx, 0, i.model.name, transformMesh(mesh, tr)), copies: i.copies });
-        continue;
+      const positions = arrange ? [] : (t?.positions ?? []);
+      if (!arrange && positions.length < i.copies) throw new SliceError(`Für „${i.model.name}“ fehlen Positionen auf dem Druckbett`);
+      const buf = await fs.promises.readFile(i.model.storedPath);
+      let mesh: Mesh;
+      if (i.model.format === '3mf') {
+        const tm = read3mf(new Uint8Array(buf));
+        mesh = { triangles: mergedTriangles(tm) };
+        if (tm.project && tm.unit === 1) {
+          // Placed at the bed center even when Orca arranges: items left on another plate or
+          // bed of the original project would otherwise be sliced as a separate plate.
+          const project = (copy: number, at: [number, number]) =>
+            partFile(idx, copy, i.model.name, '3mf', (file) => fs.promises.writeFile(file, rewrite3mf(tm, placementMatrix(mesh, tr, at))));
+          if (arrange) out.push({ path: await project(0, center), copies: i.copies });
+          else for (const [c, pos] of positions.slice(0, i.copies).entries()) out.push({ path: await project(c, pos), copies: 1 });
+          continue;
+        }
+      } else {
+        if (arrange && (!t || isIdentity(t))) {
+          out.push({ path: i.model.storedPath, copies: i.copies });
+          continue;
+        }
+        mesh = parseModel(i.model.format, buf);
       }
-      const positions = t?.positions ?? [];
-      if (positions.length < i.copies) throw new SliceError(`Für „${i.model.name}“ fehlen Positionen auf dem Druckbett`);
-      for (const [c, pos] of positions.slice(0, i.copies).entries()) {
-        out.push({ path: await partFile(idx, c, i.model.name, transformMesh(mesh, tr, pos)), copies: 1 });
-      }
+      const stl = (copy: number, at?: [number, number]) => partFile(idx, copy, i.model.name, 'stl', (file) => writeStl(transformMesh(mesh, tr, at), file));
+      if (arrange) out.push({ path: await stl(0), copies: i.copies });
+      else for (const [c, pos] of positions.slice(0, i.copies).entries()) out.push({ path: await stl(c, pos), copies: 1 });
     }
     return out;
   }
@@ -1130,10 +1184,14 @@ export function gcodeFileName(names: string[], copies: number, material: string,
       .replace(/[^\w.-]+/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '');
-  const dur = seconds === undefined ? '' : `_${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}h` : ''}${Math.round((seconds % 3600) / 60)}m`;
+  // Rounded to whole minutes first, so 4:59:40 becomes 5h0m and not 4h60m.
+  const minutes = seconds === undefined ? 0 : Math.round(seconds / 60);
+  const dur = seconds === undefined ? '' : `_${Math.floor(minutes / 60) ? `${Math.floor(minutes / 60)}h` : ''}${minutes % 60}m`;
   const base = safe(names[0] ?? '').slice(0, 80) || 'modell';
   const suffix = names.length > 1 ? `_+${names.length - 1}` : copies > 1 ? `_x${copies}` : '';
   return `${base}${suffix}_${safe(material)}${dur}.gcode`;
 }
 
 export { KINDS };
+
+const sha256 = (buf: Buffer) => createHash('sha256').update(buf).digest('hex');

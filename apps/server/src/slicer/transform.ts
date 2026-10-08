@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { ModelTransform } from '@printhub/shared';
 import { meshInfo, type Mesh } from './mesh.js';
+import { applyMat, type Mat } from './threemf.js';
 
 type Quat = ModelTransform['rotation'];
 
@@ -22,33 +23,24 @@ function rotationMatrix([x, y, z, w]: Quat): number[] {
 /**
  * Rotates and scales a mesh around its bounding-box center, then moves it so that the
  * center lies at `at` (XY) and the lowest point at Z = 0. Without `at` the part stays
- * centered on the origin (Orca arranges it).
+ * centered on the origin (Orca arranges it). Returned as a 3MF matrix, so the same placement
+ * can be applied to the mesh or written into a 3MF project.
  */
-export function transformMesh(mesh: Mesh, t: Pick<ModelTransform, 'rotation' | 'scale'>, at?: [number, number]): Mesh {
+export function placementMatrix(mesh: Mesh, t: Pick<ModelTransform, 'rotation' | 'scale'>, at?: [number, number]): Mat {
   const info = meshInfo(mesh);
   const c = [0, 1, 2].map((k) => (info.min[k]! + info.max[k]!) / 2);
-  const m = rotationMatrix(t.rotation);
-  const s = t.scale;
-  const src = mesh.triangles;
-  const out = new Float32Array(src.length);
-  for (let i = 0; i < src.length; i += 3) {
-    const x = (src[i]! - c[0]!) * s;
-    const y = (src[i + 1]! - c[1]!) * s;
-    const z = (src[i + 2]! - c[2]!) * s;
-    out[i] = m[0]! * x + m[1]! * y + m[2]! * z;
-    out[i + 1] = m[3]! * x + m[4]! * y + m[5]! * z;
-    out[i + 2] = m[6]! * x + m[7]! * y + m[8]! * z;
-  }
-  const r = meshInfo({ triangles: out });
-  const dx = (at?.[0] ?? 0) - (r.min[0] + r.max[0]) / 2;
-  const dy = (at?.[1] ?? 0) - (r.min[1] + r.max[1]) / 2;
-  const dz = -r.min[2];
-  for (let i = 0; i < out.length; i += 3) {
-    out[i] = out[i]! + dx;
-    out[i + 1] = out[i + 1]! + dy;
-    out[i + 2] = out[i + 2]! + dz;
-  }
-  return { triangles: out };
+  const r = rotationMatrix(t.rotation);
+  // p' = A (p - c): A = s R, as 3MF row-vector matrix (transposed).
+  const a = r.map((v) => v * t.scale);
+  const lin = [a[0]!, a[3]!, a[6]!, a[1]!, a[4]!, a[7]!, a[2]!, a[5]!, a[8]!];
+  const shift = [0, 1, 2].map((i) => -(a[i * 3]! * c[0]! + a[i * 3 + 1]! * c[1]! + a[i * 3 + 2]! * c[2]!));
+  const moved = meshInfo({ triangles: applyMat(mesh.triangles, [...lin, ...shift]) });
+  const d = [(at?.[0] ?? 0) - (moved.min[0] + moved.max[0]) / 2, (at?.[1] ?? 0) - (moved.min[1] + moved.max[1]) / 2, -moved.min[2]];
+  return [...lin, shift[0]! + d[0]!, shift[1]! + d[1]!, shift[2]! + d[2]!];
+}
+
+export function transformMesh(mesh: Mesh, t: Pick<ModelTransform, 'rotation' | 'scale'>, at?: [number, number]): Mesh {
+  return { triangles: applyMat(mesh.triangles, placementMatrix(mesh, t, at)) };
 }
 
 export async function writeStl(mesh: Mesh, file: string): Promise<void> {

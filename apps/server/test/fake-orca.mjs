@@ -15,6 +15,7 @@ if (proc.name === 'FAIL') {
 }
 /** Bounding box of a binary STL, to check where parts were placed. */
 const bounds = (file) => {
+  if (file.endsWith('.3mf')) return '3mf';
   const b = fs.readFileSync(file);
   const n = b.readUInt32LE(80);
   const min = [Infinity, Infinity, Infinity];

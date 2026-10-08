@@ -199,9 +199,9 @@ export class ThingiverseService {
           fs.mkdirSync(this.cfg.tmpDir, { recursive: true });
           await fs.promises.writeFile(tmp, data);
           const base = path.basename(name);
-          const model = await this.slicing.addModel(base, tmp, { ...meta, name: base.replace(/\.[^.]+$/, '') });
+          const added = await this.slicing.addModel(base, tmp, { ...meta, name: base.replace(/\.[^.]+$/, '') });
           // Identical files are stored once (content hash); report each model only once.
-          if (!out.some((m) => m.id === model.id)) out.push(model);
+          for (const model of added) if (!out.some((m) => m.id === model.id)) out.push(model);
         } finally {
           fs.rmSync(tmp, { force: true });
         }

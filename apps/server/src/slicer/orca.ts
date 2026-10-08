@@ -114,6 +114,10 @@ export async function runOrca(bin: string, input: SliceInput, timeoutMs: number,
     const reason = result.error_string && result.error_string !== 'Success.' ? explain(result.error_string) : `Exit-Code ${code}`;
     throw new SliceError(`Slicen fehlgeschlagen: ${reason}`, log);
   }
+  // One job is one plate: never print part of it silently.
+  if (fs.existsSync(path.join(outDir, 'plate_2.gcode'))) {
+    throw new SliceError('Slicen fehlgeschlagen: Orca hat die Teile auf mehrere Druckplatten verteilt, weil nicht alles auf eine passt. Weniger Kopien oder Modelle wählen. Projekte mit mehreren Druckplatten neu hochladen: Dann wird jede Platte ein eigenes Modell.', log);
+  }
   return { gcodePath, log, stats: await readGcodeStats(gcodePath) };
 }
 

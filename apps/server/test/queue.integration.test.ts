@@ -98,7 +98,7 @@ beforeAll(async () => {
   [0, 0, 0, 10, 0, 0, 0, 10, 0].forEach((v, i) => stl.writeFloatLE(v, 84 + 12 + i * 4));
   const mf = new FormData();
   mf.append('file', new Blob([new Uint8Array(stl)]), 'dreieck.stl');
-  modelId = (await api('/api/models', { form: mf })).body.id;
+  modelId = (await api('/api/models', { form: mf })).body[0].id;
 });
 
 afterAll(async () => {

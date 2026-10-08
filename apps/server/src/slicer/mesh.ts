@@ -1,5 +1,5 @@
-import { unzipSync, strFromU8 } from 'fflate';
 import { encodePng } from './png.js';
+import { mergedTriangles, read3mf, ThreeMfError } from './threemf.js';
 
 export class MeshError extends Error {}
 
@@ -64,96 +64,13 @@ export function parseObj(text: string): Mesh {
   return { triangles: Float32Array.from(out) };
 }
 
-type Mat = number[]; // 3x4 affine, row-major as in 3MF: m00 m01 m02 m10 m11 m12 m20 m21 m22 m30 m31 m32
-const IDENTITY: Mat = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
-
-function parseMat(attr: string | undefined): Mat {
-  if (!attr) return IDENTITY;
-  const m = attr.trim().split(/\s+/).map(Number);
-  return m.length === 12 && m.every(Number.isFinite) ? m : IDENTITY;
-}
-
-/** a then b (3MF uses row vectors: p' = p * M). */
-function mul(a: Mat, b: Mat): Mat {
-  const r = (i: number, j: number, m: Mat) => m[i * 3 + j]!;
-  const out: number[] = [];
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 3; j++) {
-      let s = i === 3 ? r(3, j, b) : 0;
-      for (let k = 0; k < 3; k++) s += r(i, k, a) * r(k, j, b);
-      out.push(s);
-    }
-  }
-  return out;
-}
-
-const attr = (tag: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(tag)?.[1];
-
 export function parse3mf(buf: Buffer): Mesh {
-  let files: Record<string, Uint8Array>;
   try {
-    files = unzipSync(new Uint8Array(buf));
-  } catch {
-    throw new MeshError('Keine gültige 3MF-Datei');
+    return { triangles: mergedTriangles(read3mf(new Uint8Array(buf))) };
+  } catch (err) {
+    if (err instanceof ThreeMfError) throw new MeshError(err.message);
+    throw err;
   }
-  const xml = new Map<string, string>();
-  for (const [name, data] of Object.entries(files)) if (name.endsWith('.model')) xml.set('/' + name.replace(/^\//, ''), strFromU8(data));
-  const mainPath = [...xml.keys()].find((p) => /\/3D\/3dmodel\.model$/i.test(p)) ?? [...xml.keys()][0];
-  if (!mainPath) throw new MeshError('3MF enthält kein Modell');
-
-  type Obj = { mesh?: Float32Array; components: { path: string; id: string; m: Mat }[] };
-  const objects = new Map<string, Obj>();
-  for (const [file, text] of xml) {
-    for (const om of text.matchAll(/<object\b([^>]*)>([\s\S]*?)<\/object>/g)) {
-      const id = attr(om[1]!, 'id')!;
-      const body = om[2]!;
-      const obj: Obj = { components: [] };
-      const meshBody = /<mesh>([\s\S]*?)<\/mesh>/.exec(body)?.[1];
-      if (meshBody) {
-        const verts: number[] = [];
-        for (const v of meshBody.matchAll(/<vertex\b([^>]*)\/>/g)) verts.push(+attr(v[1]!, 'x')!, +attr(v[1]!, 'y')!, +attr(v[1]!, 'z')!);
-        const tris: number[] = [];
-        for (const t of meshBody.matchAll(/<triangle\b([^>]*)\/>/g)) {
-          for (const k of ['v1', 'v2', 'v3']) {
-            const i = Number(attr(t[1]!, k)) * 3;
-            tris.push(verts[i]!, verts[i + 1]!, verts[i + 2]!);
-          }
-        }
-        obj.mesh = Float32Array.from(tris);
-      }
-      for (const c of body.matchAll(/<component\b([^>]*)\/>/g)) {
-        obj.components.push({
-          path: attr(c[1]!, 'p:path') ?? file,
-          id: attr(c[1]!, 'objectid')!,
-          m: parseMat(attr(c[1]!, 'transform')),
-        });
-      }
-      objects.set(`${file}#${id}`, obj);
-    }
-  }
-
-  const out: number[] = [];
-  const emit = (key: string, m: Mat, depth: number) => {
-    const obj = objects.get(key);
-    if (!obj || depth > 10) return;
-    if (obj.mesh) {
-      for (let i = 0; i < obj.mesh.length; i += 3) {
-        const x = obj.mesh[i]!, y = obj.mesh[i + 1]!, z = obj.mesh[i + 2]!;
-        out.push(
-          x * m[0]! + y * m[3]! + z * m[6]! + m[9]!,
-          x * m[1]! + y * m[4]! + z * m[7]! + m[10]!,
-          x * m[2]! + y * m[5]! + z * m[8]! + m[11]!,
-        );
-      }
-    }
-    for (const c of obj.components) emit(`${c.path}#${c.id}`, mul(c.m, m), depth + 1);
-  };
-  const main = xml.get(mainPath)!;
-  const build = /<build\b[^>]*>([\s\S]*?)<\/build>/.exec(main)?.[1] ?? '';
-  for (const item of build.matchAll(/<item\b([^>]*)\/>/g)) {
-    emit(`${mainPath}#${attr(item[1]!, 'objectid')}`, parseMat(attr(item[1]!, 'transform')), 0);
-  }
-  return { triangles: Float32Array.from(out) };
 }
 
 /**

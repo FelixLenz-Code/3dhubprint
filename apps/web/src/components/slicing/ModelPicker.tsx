@@ -135,7 +135,10 @@ function UploadZone({ onUploaded }: { onUploaded: (models: ModelInfo[]) => void 
       form.append('file', file, file.name);
       setProgress({ name: file.name, value: 0, index, total: valid.length });
       try {
-        done.push(await uploadWithProgress<ModelInfo>('/models', form, (v) => setProgress({ name: file.name, value: v, index, total: valid.length })));
+        // A slicer project with several plates comes back as one model per plate.
+        const added = await uploadWithProgress<ModelInfo[]>('/models', form, (v) => setProgress({ name: file.name, value: v, index, total: valid.length }));
+        done.push(...added);
+        if (added.length > 1) toast(`${file.name}: ${added.length} Druckplatten, als ${added.length} Modelle übernommen`);
       } catch (err) {
         toast(`${file.name}: ${(err as Error).message}`, 'critical');
       }
