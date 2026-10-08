@@ -1,7 +1,18 @@
 import { EventEmitter } from 'node:events';
 import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
-import { createSpoolSchema, type CreateSpoolInput, type FilamentInfo, type PrinterSpool, type SpoolInfo, type SpoolmanStatus } from '@printhub/shared';
+import {
+  createSpoolSchema,
+  newFilamentSchema,
+  updateSpoolSchema,
+  type CreateSpoolInput,
+  type FilamentInfo,
+  type NewFilamentInput,
+  type PrinterSpool,
+  type SpoolInfo,
+  type SpoolmanStatus,
+  type UpdateSpoolInput,
+} from '@printhub/shared';
 import type { Db } from '../db/index.js';
 import { appSettings } from '../db/schema.js';
 import type { PrinterManager } from '../printers/manager.js';
@@ -95,10 +106,11 @@ export class SpoolmanService extends EventEmitter<Events> {
 
   // --- spools ---------------------------------------------------------------
 
+  /** All spools, archived ones last (callers filter them out where they don't belong). */
   async spools(fresh = false): Promise<SpoolInfo[]> {
     if (!this.configured) return [];
     if (!fresh && this.cache && Date.now() - this.cache.at < CACHE_MS) return this.cache.spools;
-    const raw = await this.request<Json[]>('/api/v1/spool');
+    const raw = await this.request<Json[]>('/api/v1/spool?allow_archived=true');
     const spools = raw.map(toSpoolInfo).sort((a, b) => Number(a.archived) - Number(b.archived) || (b.lastUsed ?? 0) - (a.lastUsed ?? 0) || a.id - b.id);
     this.cache = { at: Date.now(), spools };
     return spools;
@@ -131,29 +143,11 @@ export class SpoolmanService extends EventEmitter<Events> {
       });
       filament = toFilamentInfo(f);
     } else {
-      const f = b.filament!;
-      let vendorId: number | undefined;
-      if (f.vendor) {
-        const vendors = await this.request<Json[]>('/api/v1/vendor');
-        const found = vendors.find((v) => String(v.name).toLowerCase() === f.vendor!.toLowerCase());
-        vendorId = Number((found ?? (await this.request<Json>('/api/v1/vendor', { method: 'POST', body: JSON.stringify({ name: f.vendor }) }))).id);
-      }
-      filament = toFilamentInfo(
-        await this.request<Json>('/api/v1/filament', {
-          method: 'POST',
-          body: JSON.stringify({
-            name: f.name,
-            vendor_id: vendorId,
-            material: f.material,
-            color_hex: f.color,
-            density: f.density,
-            diameter: f.diameter,
-            weight: f.weight,
-            spool_weight: f.spoolWeight,
-            price: f.price,
-          }),
-        }),
-      );
+      filament = toFilamentInfo(await this.request<Json>('/api/v1/filament', { method: 'POST', body: JSON.stringify(await this.filamentBody(b.filament!)) }));
+    }
+    const initial = b.initialWeight ?? filament.weight ?? undefined;
+    if (b.usedWeight !== undefined && initial !== undefined && b.usedWeight > initial) {
+      throw new SpoolmanError(`Bereits verbraucht (${b.usedWeight} g) ist mehr als auf der Spule war (${initial} g)`, 400);
     }
     const created: SpoolInfo[] = [];
     for (let i = 0; i < b.count; i++) {
@@ -161,10 +155,12 @@ export class SpoolmanService extends EventEmitter<Events> {
         method: 'POST',
         body: JSON.stringify({
           filament_id: filament.id,
-          initial_weight: b.initialWeight ?? filament.weight ?? undefined,
+          initial_weight: initial,
+          used_weight: b.usedWeight || undefined,
           spool_weight: filament.spoolWeight ?? undefined,
           price: b.price ?? filament.price ?? undefined,
           location: b.location,
+          comment: b.comment,
         }),
       });
       created.push(toSpoolInfo(spool));
@@ -174,20 +170,81 @@ export class SpoolmanService extends EventEmitter<Events> {
     return created;
   }
 
-  /** Corrects the remaining weight (weighed) and/or archives a spool. */
-  async updateSpool(id: number, patch: { remainingWeight?: number; archived?: boolean }): Promise<SpoolInfo> {
+  /** Spoolman body for a new or edited filament; finds or creates the vendor by name. */
+  private async filamentBody(input: NewFilamentInput) {
+    const f = newFilamentSchema.parse(input);
+    let vendorId: number | null = null;
+    if (f.vendor) {
+      const vendors = await this.request<Json[]>('/api/v1/vendor');
+      const found = vendors.find((v) => String(v.name).toLowerCase() === f.vendor!.toLowerCase());
+      vendorId = Number((found ?? (await this.request<Json>('/api/v1/vendor', { method: 'POST', body: JSON.stringify({ name: f.vendor }) }))).id);
+    }
+    return {
+      name: f.name,
+      vendor_id: vendorId,
+      material: f.material,
+      color_hex: f.color,
+      density: f.density,
+      diameter: f.diameter,
+      weight: f.weight,
+      spool_weight: f.spoolWeight ?? null,
+      price: f.price ?? null,
+    };
+  }
+
+  async updateFilament(id: number, input: NewFilamentInput): Promise<FilamentInfo> {
+    const filament = toFilamentInfo(await this.request<Json>(`/api/v1/filament/${id}`, { method: 'PATCH', body: JSON.stringify(await this.filamentBody(input)) }));
+    this.cache = undefined;
+    return filament;
+  }
+
+  async deleteFilament(id: number) {
+    try {
+      await this.request(`/api/v1/filament/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      // Spoolman refuses while spools still reference the filament.
+      if (err instanceof SpoolmanError && err.status === 403) throw new SpoolmanError('Es gibt noch Spulen mit diesem Filament (auch archivierte). Erst die Spulen löschen.', 409);
+      throw err;
+    }
+  }
+
+  /** Edits a spool: weighed rest or usage, weights, price, location, comment, archived. */
+  async updateSpool(id: number, input: UpdateSpoolInput): Promise<SpoolInfo> {
+    const patch = updateSpoolSchema.parse(input);
     const spool = toSpoolInfo(
       await this.request<Json>(`/api/v1/spool/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ remaining_weight: patch.remainingWeight, archived: patch.archived }),
+        body: JSON.stringify({
+          remaining_weight: patch.remainingWeight,
+          used_weight: patch.usedWeight,
+          initial_weight: patch.initialWeight,
+          spool_weight: patch.spoolWeight,
+          price: patch.price,
+          location: patch.location,
+          comment: patch.comment,
+          archived: patch.archived,
+        }),
       }),
     );
     this.cache = undefined;
     // An archived spool should not stay active on a printer PrintHub tracks.
-    if (patch.archived) {
-      for (const p of this.manager.list()) if (this.manager.spoolId(p.id) === id) this.manager.setSpoolId(p.id, null);
-    }
+    if (patch.archived) this.releaseSpool(id);
     return spool;
+  }
+
+  async deleteSpool(id: number) {
+    await this.request(`/api/v1/spool/${id}`, { method: 'DELETE' });
+    this.cache = undefined;
+    this.releaseSpool(id);
+  }
+
+  private releaseSpool(id: number) {
+    for (const p of this.manager.list()) {
+      if (this.manager.spoolId(p.id) === id) {
+        this.manager.setSpoolId(p.id, null);
+        this.emit('spool', p.id);
+      }
+    }
   }
 
   /** Whether the printer's Moonraker talks to Spoolman itself. */
@@ -251,6 +308,7 @@ export class SpoolmanService extends EventEmitter<Events> {
       throw new SpoolmanError(`Spoolman ist unter ${base} nicht erreichbar`);
     }
     if (res.status === 404) throw new SpoolmanError('Bei Spoolman nicht gefunden', 404);
+    if (res.status === 403) throw new SpoolmanError('Spoolman verweigert die Änderung', 403);
     if (res.status === 422 || res.status === 400) {
       const detail = await res.json().catch(() => null);
       throw new SpoolmanError(`Spoolman lehnt die Eingabe ab${detail?.message ? `: ${detail.message}` : ''}`, 400);
@@ -296,6 +354,12 @@ export function toSpoolInfo(s: Json): SpoolInfo {
     location: str(s.location),
     lastUsed: time(s.last_used),
     archived: s.archived === true,
+    filamentId: num(f.id),
+    price: spoolPrice,
+    spoolWeight: num(s.spool_weight) ?? num(f.spool_weight),
+    comment: str(s.comment),
+    firstUsed: time(s.first_used),
+    registered: time(s.registered),
   };
 }
 

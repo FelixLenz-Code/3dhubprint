@@ -208,6 +208,14 @@ export interface SpoolInfo {
   location: string | null;
   lastUsed: number | null;
   archived: boolean;
+  filamentId: number | null;
+  /** Price of this spool (€), if set on the spool itself. */
+  price: number | null;
+  /** Weight of the empty spool (g), for weighing. */
+  spoolWeight: number | null;
+  comment: string | null;
+  firstUsed: number | null;
+  registered: number | null;
 }
 
 export interface PrinterSpool {
@@ -262,6 +270,7 @@ export const newFilamentSchema = z.object({
   spoolWeight: z.number().min(0).max(10_000).optional(),
   price: money.optional(),
 });
+export type NewFilamentInput = z.input<typeof newFilamentSchema>;
 
 export const createSpoolSchema = z
   .object({
@@ -271,19 +280,40 @@ export const createSpoolSchema = z
     count: z.number().int().min(1).max(20).default(1),
     /** Default: the filament's net weight. */
     initialWeight: z.number().positive().max(100_000).optional(),
+    /** Filament already used from the spool (g), e.g. for a spool that was opened before. */
+    usedWeight: z.number().min(0).max(100_000).optional(),
     /** Default: the filament's price. */
     price: money.optional(),
     location: optText(64),
+    comment: optText(1024),
     /** Make the (first) new spool the active spool of this printer. */
     printerId: z.number().int().positive().optional(),
   })
   .refine((s) => (s.filamentId === undefined) !== (s.filament === undefined), 'Entweder ein vorhandenes Filament wählen oder ein neues angeben');
 export type CreateSpoolInput = z.input<typeof createSpoolSchema>;
 
+const nullableText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v || null));
+
 export const updateSpoolSchema = z
   .object({
     /** Weighed: what is left on the spool (g, without the empty spool). */
     remainingWeight: z.number().min(0).max(100_000).optional(),
+    /** Alternatively: how much has been used so far (g). */
+    usedWeight: z.number().min(0).max(100_000).optional(),
+    initialWeight: z.number().positive().max(100_000).optional(),
+    spoolWeight: z.number().min(0).max(10_000).nullable().optional(),
+    price: money.nullable().optional(),
+    location: nullableText(64),
+    comment: nullableText(1024),
     archived: z.boolean().optional(),
   })
-  .refine((u) => u.remainingWeight !== undefined || u.archived !== undefined, 'Keine Änderung angegeben');
+  .refine((u) => Object.values(u).some((v) => v !== undefined), 'Keine Änderung angegeben')
+  .refine((u) => u.remainingWeight === undefined || u.usedWeight === undefined, 'Entweder Restgewicht oder Verbrauch angeben, nicht beides');
+export type UpdateSpoolInput = z.input<typeof updateSpoolSchema>;

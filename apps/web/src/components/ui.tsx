@@ -114,3 +114,32 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
     </div>
   );
 }
+
+export function Segmented<K extends string>({ value, onChange, options, label }: { value: K; onChange: (v: K) => void; options: Record<K, string>; label: string }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex max-w-full overflow-x-auto rounded-lg [scrollbar-width:none] border border-border bg-surface p-0.5">
+      {(Object.keys(options) as K[]).map((k) => (
+        <button
+          key={k}
+          type="button"
+          role="radio"
+          aria-checked={value === k}
+          onClick={() => onChange(k)}
+          className={clsx('min-h-8 whitespace-nowrap rounded-md px-2 text-sm sm:px-3', value === k ? 'bg-surface-2 font-medium text-text' : 'text-text-2 hover:text-text')}
+        >
+          {options[k]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <Card className="min-w-0 px-4 py-3">
+      <div className="text-xs text-text-3">{label}</div>
+      <div className="truncate text-2xl font-semibold">{value}</div>
+      {sub && <div className="text-xs text-text-3">{sub}</div>}
+    </Card>
+  );
+}

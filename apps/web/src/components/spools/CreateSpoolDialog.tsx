@@ -2,36 +2,35 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import clsx from 'clsx';
-import { MATERIAL_DENSITY, type CreateSpoolInput, type FilamentInfo, type SpoolInfo } from '@printhub/shared';
+import type { CreateSpoolInput, FilamentInfo, SpoolInfo } from '@printhub/shared';
 import { api } from '../../lib/api';
 import { toast, useAction } from '../../lib/feedback';
 import { formatMoney, formatWeight } from '../../lib/stats';
 import { Modal } from '../Modal';
 import { Alert, Button, Field, Input, Spinner } from '../ui';
-
-const MATERIALS = Object.keys(MATERIAL_DENSITY);
-const num = (s: string) => (s.trim() === '' ? undefined : Number(s.replace(',', '.')));
-const str = (n: number | null | undefined) => (n == null ? '' : String(n).replace('.', ','));
+import { EMPTY_FILAMENT, FilamentFields, filamentFormValid, filamentInput, num, str, validNumber } from './FilamentFields';
 
 /** New spool(s) in Spoolman: of a filament already there, or of a new one. */
-export function CreateSpoolDialog({ open, onClose, printerId }: { open: boolean; onClose: () => void; printerId?: number }) {
+export function CreateSpoolDialog({ open, onClose, printerId, filamentId }: { open: boolean; onClose: () => void; printerId?: number; filamentId?: number }) {
   return (
     <Modal open={open} onClose={onClose} title="Spule anlegen">
-      <CreateSpoolForm onDone={onClose} printerId={printerId} />
+      <CreateSpoolForm onDone={onClose} printerId={printerId} initialFilamentId={filamentId} />
     </Modal>
   );
 }
 
-function CreateSpoolForm({ onDone, printerId }: { onDone: () => void; printerId?: number }) {
+function CreateSpoolForm({ onDone, printerId, initialFilamentId }: { onDone: () => void; printerId?: number; initialFilamentId?: number }) {
   const qc = useQueryClient();
   const filaments = useQuery({ queryKey: ['filaments'], queryFn: () => api<FilamentInfo[]>('/spoolman/filaments') });
   const [mode, setMode] = useState<'existing' | 'new'>();
-  const [filamentId, setFilamentId] = useState<number>();
-  const [f, setF] = useState({ vendor: '', name: '', material: 'PLA', color: '#808080', density: '1,24', diameter: '1,75', weight: '1000', spoolWeight: '', price: '' });
+  const [filamentId, setFilamentId] = useState(initialFilamentId);
+  const [f, setF] = useState(EMPTY_FILAMENT);
   const [count, setCount] = useState('1');
   const [initialWeight, setInitialWeight] = useState('');
+  const [usedWeight, setUsedWeight] = useState('');
   const [price, setPrice] = useState('');
   const [location, setLocation] = useState('');
+  const [comment, setComment] = useState('');
   const [activate, setActivate] = useState(printerId !== undefined);
   const { busy, run } = useAction();
 
@@ -39,22 +38,29 @@ function CreateSpoolForm({ onDone, printerId }: { onDone: () => void; printerId?
   const effectiveMode = mode ?? (filaments.data && filaments.data.length === 0 ? 'new' : 'existing');
   const selected = filaments.data?.find((x) => x.id === filamentId);
 
+  // Full spool weight: entered, else the filament's net weight.
+  const fullWeight = num(initialWeight) ?? (effectiveMode === 'existing' ? selected?.weight : num(f.weight)) ?? undefined;
+  const used = num(usedWeight);
+  const tooMuchUsed = used !== undefined && fullWeight !== undefined && used > fullWeight;
+
   const body = useMemo((): CreateSpoolInput | null => {
     const n = Number(count);
     if (!Number.isInteger(n) || n < 1 || n > 20) return null;
-    const common = { count: n, initialWeight: num(initialWeight), price: num(price), location: location.trim() || undefined, printerId: activate ? printerId : undefined };
-    if (effectiveMode === 'existing') return filamentId ? { ...common, filamentId } : null;
-    const density = num(f.density);
-    const diameter = num(f.diameter);
-    const weight = num(f.weight);
-    if (!f.name.trim() || !f.material.trim() || !density || !diameter || !weight) return null;
-    return {
-      ...common,
-      filament: { vendor: f.vendor, name: f.name, material: f.material, color: f.color, density, diameter, weight, spoolWeight: num(f.spoolWeight), price: num(f.price) },
+    const common = {
+      count: n,
+      initialWeight: num(initialWeight),
+      usedWeight: num(usedWeight) || undefined,
+      price: num(price),
+      location: location.trim() || undefined,
+      comment: comment.trim() || undefined,
+      printerId: activate ? printerId : undefined,
     };
-  }, [count, initialWeight, price, location, activate, printerId, effectiveMode, filamentId, f]);
+    if (effectiveMode === 'existing') return filamentId ? { ...common, filamentId } : null;
+    const filament = filamentInput(f);
+    return filament && { ...common, filament };
+  }, [count, initialWeight, usedWeight, price, location, comment, activate, printerId, effectiveMode, filamentId, f]);
 
-  const invalidNumber = [count, initialWeight, price, f.density, f.diameter, f.weight, f.spoolWeight, f.price].some((v) => v.trim() !== '' && !(Number(v.replace(',', '.')) >= 0));
+  const invalidNumber = ![count, initialWeight, usedWeight, price].every(validNumber) || (effectiveMode === 'new' && !filamentFormValid(f));
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -70,8 +76,6 @@ function CreateSpoolForm({ onDone, printerId }: { onDone: () => void; printerId?
       onDone();
     });
   };
-
-  const setMaterial = (material: string) => setF({ ...f, material, density: MATERIAL_DENSITY[material.toUpperCase()] ? str(MATERIAL_DENSITY[material.toUpperCase()]) : f.density });
 
   return (
     <form onSubmit={submit} className="space-y-5">
@@ -118,59 +122,38 @@ function CreateSpoolForm({ onDone, printerId }: { onDone: () => void; printerId?
           </div>
         )
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Hersteller">
-            <Input value={f.vendor} onChange={(e) => setF({ ...f, vendor: e.target.value })} placeholder="z. B. Bambu Lab" />
-          </Field>
-          <Field label="Name">
-            <Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="z. B. PLA Basic Orange" required />
-          </Field>
-          <Field label="Material">
-            <Input value={f.material} onChange={(e) => setMaterial(e.target.value)} list="spool-materials" required />
-            <datalist id="spool-materials">
-              {MATERIALS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </Field>
-          <Field label="Farbe">
-            <div className="flex items-center gap-2">
-              <input type="color" value={f.color} onChange={(e) => setF({ ...f, color: e.target.value })} className="h-10 w-14 shrink-0 cursor-pointer rounded-lg border border-border bg-surface" aria-label="Farbe wählen" />
-              <span className="font-mono text-sm text-text-2">{f.color}</span>
-            </div>
-          </Field>
-          <Field label="Filament pro Spule (g)" hint="Nettogewicht, meist 1000">
-            <Input inputMode="decimal" value={f.weight} onChange={(e) => setF({ ...f, weight: e.target.value })} />
-          </Field>
-          <Field label="Preis pro Spule (€)">
-            <Input inputMode="decimal" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} placeholder="z. B. 19,99" />
-          </Field>
-          <Field label="Leere Spule (g)" hint="Zum Nachwiegen, optional">
-            <Input inputMode="decimal" value={f.spoolWeight} onChange={(e) => setF({ ...f, spoolWeight: e.target.value })} />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Dichte (g/cm³)">
-              <Input inputMode="decimal" value={f.density} onChange={(e) => setF({ ...f, density: e.target.value })} />
-            </Field>
-            <Field label="Durchmesser (mm)">
-              <Input inputMode="decimal" value={f.diameter} onChange={(e) => setF({ ...f, diameter: e.target.value })} />
-            </Field>
-          </div>
-        </div>
+        <FilamentFields value={f} onChange={setF} />
       )}
 
-      <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-4">
+      <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
         <Field label="Anzahl Spulen">
           <Input inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} />
         </Field>
-        <Field label="Gewicht (g)" hint="Leer = voll">
+        <Field label="Gewicht (g)" hint="Volle Spule, leer = Filamentgewicht">
           <Input inputMode="decimal" value={initialWeight} onChange={(e) => setInitialWeight(e.target.value)} placeholder={str(selected?.weight ?? num(f.weight))} />
+        </Field>
+        <Field
+          label="Bereits verbraucht (g)"
+          hint={
+            tooMuchUsed ? (
+              <span className="text-critical">Mehr als auf der Spule ist ({formatWeight(fullWeight)})</span>
+            ) : used && fullWeight !== undefined ? (
+              `Noch ${formatWeight(fullWeight - used)} drauf`
+            ) : (
+              'Für angebrochene Spulen'
+            )
+          }
+        >
+          <Input inputMode="decimal" value={usedWeight} onChange={(e) => setUsedWeight(e.target.value)} placeholder="0" />
         </Field>
         <Field label="Preis (€)" hint="Leer = Filamentpreis">
           <Input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder={str(effectiveMode === 'existing' ? selected?.price : num(f.price))} />
         </Field>
         <Field label="Lagerort">
           <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="z. B. Regal" />
+        </Field>
+        <Field label="Notiz">
+          <Input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="optional" maxLength={1024} />
         </Field>
       </div>
 
@@ -186,7 +169,7 @@ function CreateSpoolForm({ onDone, printerId }: { onDone: () => void; printerId?
         <Button type="button" variant="ghost" onClick={onDone}>
           Abbrechen
         </Button>
-        <Button type="submit" disabled={!body || invalidNumber} loading={busy === 'create'}>
+        <Button type="submit" disabled={!body || invalidNumber || tooMuchUsed} loading={busy === 'create'}>
           Anlegen
         </Button>
       </div>

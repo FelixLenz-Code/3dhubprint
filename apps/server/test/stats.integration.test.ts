@@ -222,6 +222,10 @@ describe('Spoolman', () => {
     expect(filaments).toEqual([expect.objectContaining({ name: 'PLA Matte Weiß', vendor: 'Bambu', weight: 1000, spoolWeight: 250, price: 22 })]);
     const more = (await api<SpoolInfo[]>('/api/spoolman/spools', { body: { filamentId: filaments[0].id, initialWeight: 500 } })).body;
     expect(more[0]).toMatchObject({ remainingG: 500, initialG: 500 });
+    // A spool that was opened before: already used filament is booked right away.
+    const opened = (await api<SpoolInfo[]>('/api/spoolman/spools', { body: { filamentId: filaments[0].id, usedWeight: 350, comment: 'angebrochen' } })).body;
+    expect(opened[0]).toMatchObject({ initialG: 1000, usedG: 350, remainingG: 650, comment: 'angebrochen', spoolWeight: 250 });
+    expect((await api('/api/spoolman/spools', { body: { filamentId: filaments[0].id, initialWeight: 500, usedWeight: 600 } })).status).toBe(400);
 
     expect((await api('/api/spoolman/spools', { body: { filamentId: 1, filament: { name: 'x', material: 'PLA', density: 1 } } })).status).toBe(400);
     expect((await api('/api/spoolman/spools', { body: { filamentId: 99 } })).status).toBe(404);
@@ -229,11 +233,33 @@ describe('Spoolman', () => {
 
   it('records a weighed remaining weight and archives spools', async () => {
     const id = spoolman.spools.length;
-    expect((await api<SpoolInfo>(`/api/spoolman/spools/${id}`, { method: 'PATCH', body: { remainingWeight: 321 } })).body).toMatchObject({ remainingG: 321, usedG: 179 });
+    expect((await api<SpoolInfo>(`/api/spoolman/spools/${id}`, { method: 'PATCH', body: { remainingWeight: 321 } })).body).toMatchObject({ remainingG: 321, usedG: 1000 - 321 });
     const active = (await api<PrinterSpool>(`/api/printers/${printerId}/spool`)).body.spool!.id;
     expect((await api<SpoolInfo>(`/api/spoolman/spools/${active}`, { method: 'PATCH', body: { archived: true } })).body.archived).toBe(true);
     expect((await api<PrinterSpool>(`/api/printers/${printerId}/spool`)).body.spool).toBeNull(); // no longer active
     expect((await api(`/api/spoolman/spools/${id}`, { method: 'PATCH', body: {} })).status).toBe(400);
+    expect((await api(`/api/spoolman/spools/${id}`, { method: 'PATCH', body: { remainingWeight: 1, usedWeight: 1 } })).status).toBe(400);
+    // Archived spools stay in the list (marked), so they can be restored.
+    expect((await api<SpoolInfo[]>('/api/spoolman/spools?fresh=1')).body.find((s) => s.id === active)?.archived).toBe(true);
+  });
+
+  it('edits and deletes spools and filaments', async () => {
+    const id = spoolman.spools.at(-1)!.id as number;
+    const edited = (await api<SpoolInfo>(`/api/spoolman/spools/${id}`, { method: 'PATCH', body: { usedWeight: 100, location: 'Trockenbox', comment: '', price: null } })).body;
+    expect(edited).toMatchObject({ usedG: 100, location: 'Trockenbox', comment: null, price: null });
+
+    const filamentId = edited.filamentId!;
+    const f = (await api(`/api/spoolman/filaments/${filamentId}`, { method: 'PATCH', body: { vendor: 'Neu', name: 'PLA Matt', material: 'PLA', density: 1.24, weight: 1000, price: 25 } })).body;
+    expect(f).toMatchObject({ name: 'PLA Matt', vendor: 'Neu', price: 25, spoolWeight: null });
+    expect((await api(`/api/spoolman/filaments/${filamentId}`, { method: 'DELETE' })).status).toBe(409); // spools still use it
+
+    await api(`/api/printers/${printerId}/spool`, { method: 'PUT', body: { spoolId: id } });
+    for (const s of spoolman.spools.filter((x) => (x.filament as { id: number }).id === filamentId)) {
+      expect((await api(`/api/spoolman/spools/${s.id}`, { method: 'DELETE' })).status).toBe(200);
+    }
+    expect((await api<PrinterSpool>(`/api/printers/${printerId}/spool`)).body.spool).toBeNull();
+    expect((await api(`/api/spoolman/filaments/${filamentId}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await api(`/api/spoolman/spools/${id}`, { method: 'DELETE' })).status).toBe(404);
   });
 
   it('leaves tracking to Moonraker when it has its own Spoolman integration', async () => {

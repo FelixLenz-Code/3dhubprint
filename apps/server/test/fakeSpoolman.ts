@@ -46,18 +46,20 @@ export class FakeSpoolman {
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      const url = req.url ?? '';
+      const [url = '', query = ''] = (req.url ?? '').split('?');
       if (url === '/api/v1/info') return json(200, { version: '0.22.1' });
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
       if (url === '/api/v1/spool' && req.method === 'POST') {
         const filament = this.filaments.find((f) => f.id === body.filament_id);
         if (!filament) return json(404, { message: 'filament not found' });
+        if (body.used_weight !== undefined && body.remaining_weight !== undefined) return json(400, { message: 'Only specify either remaining_weight or used_weight.' });
         const weight = body.initial_weight ?? filament.weight;
-        const spool = { id: this.spools.length + 1, ...body, filament, initial_weight: weight, remaining_weight: weight, used_weight: 0, archived: false };
+        const used = body.used_weight ?? 0;
+        const spool = { id: Math.max(0, ...this.spools.map((x) => Number(x.id))) + 1, ...body, filament, initial_weight: weight, remaining_weight: weight - used, used_weight: used, archived: false };
         this.spools.push(spool);
         return json(200, spool);
       }
-      if (url === '/api/v1/spool') return json(200, this.spools.filter((s) => !s.archived));
+      if (url === '/api/v1/spool') return json(200, this.spools.filter((s) => !s.archived || query.includes('allow_archived=true')));
       if (url === '/api/v1/vendor' && req.method === 'POST') {
         const v = { id: this.vendors.length + 1, name: body.name };
         this.vendors.push(v);
@@ -74,18 +76,29 @@ export class FakeSpoolman {
       const fil = /^\/api\/v1\/filament\/(\d+)$/.exec(url);
       if (fil) {
         const f = this.filaments.find((x) => x.id === Number(fil[1]));
-        return f ? json(200, f) : json(404, { message: 'not found' });
+        if (!f) return json(404, { message: 'not found' });
+        if (req.method === 'DELETE') {
+          if (this.spools.some((sp) => (sp.filament as { id: number }).id === f.id)) return json(403, { message: 'Failed to delete filament' });
+          this.filaments = this.filaments.filter((x) => x !== f);
+          return json(200, { message: 'Success!' });
+        }
+        if (req.method === 'PATCH') Object.assign(f, body, { vendor: this.vendors.find((v) => v.id === body.vendor_id) ?? null });
+        return json(200, f);
       }
       const patch = /^\/api\/v1\/spool\/(\d+)$/.exec(url);
       if (patch && req.method === 'PATCH') {
         const sp = this.spools.find((x) => x.id === Number(patch[1]));
         if (!sp) return json(404, { message: 'not found' });
-        if (body.archived !== undefined) sp.archived = body.archived;
-        if (body.remaining_weight !== undefined) {
-          sp.remaining_weight = body.remaining_weight;
-          sp.used_weight = Number(sp.initial_weight) - body.remaining_weight;
-        }
+        for (const k of ['archived', 'initial_weight', 'spool_weight', 'price', 'location', 'comment']) if (body[k] !== undefined) sp[k] = body[k];
+        if (body.remaining_weight !== undefined) sp.used_weight = Number(sp.initial_weight) - body.remaining_weight;
+        if (body.used_weight !== undefined) sp.used_weight = body.used_weight;
+        sp.remaining_weight = Number(sp.initial_weight) - Number(sp.used_weight);
         return json(200, sp);
+      }
+      if (patch && req.method === 'DELETE') {
+        const before = this.spools.length;
+        this.spools = this.spools.filter((x) => x.id !== Number(patch[1]));
+        return before === this.spools.length ? json(404, { message: 'not found' }) : json(200, { message: 'Success!' });
       }
       const use = /^\/api\/v1\/spool\/(\d+)\/use$/.exec(url);
       if (use && req.method === 'PUT') {

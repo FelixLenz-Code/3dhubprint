@@ -1,18 +1,20 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { BarChart3, Boxes, ClipboardList, LayoutGrid, LogOut, Settings, WifiOff } from 'lucide-react';
+import { BarChart3, Boxes, ClipboardList, Disc3, LayoutGrid, LogOut, Settings, WifiOff } from 'lucide-react';
 import clsx from 'clsx';
 import type { Me } from '@printhub/shared';
 import { api } from '../lib/api';
 import { useRefreshAuth } from '../lib/auth';
 import { useLive } from '../lib/live';
 
-const NAV = [
+const NAV: { to: string; label: string; short?: string; icon: typeof Settings; end: boolean }[] = [
   { to: '/', label: 'Drucker', icon: LayoutGrid, end: true },
   { to: '/jobs', label: 'Aufträge', icon: ClipboardList, end: false },
   { to: '/models', label: 'Modelle', icon: Boxes, end: false },
+  { to: '/spools', label: 'Spulen', icon: Disc3, end: false },
   { to: '/stats', label: 'Statistik', icon: BarChart3, end: false },
-  { to: '/settings', label: 'Einstellungen', icon: Settings, end: false },
+  // Six tabs don't fit "Einstellungen" on narrow phones.
+  { to: '/settings', label: 'Einstellungen', short: 'Optionen', icon: Settings, end: false },
 ];
 
 export function Layout({ user }: { user: Me }) {
@@ -79,17 +81,18 @@ export function Layout({ user }: { user: Me }) {
 
       {/* Mobile bottom navigation */}
       <nav className="fixed inset-x-0 bottom-0 z-20 flex border-t border-border bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
+        {NAV.map(({ to, label, short, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
+            aria-label={label}
             className={({ isActive }) =>
-              clsx('flex flex-1 flex-col items-center gap-1 py-2.5 text-xs', isActive ? 'text-accent' : 'text-text-3')
+              clsx('flex min-w-0 flex-1 flex-col items-center gap-1 py-2.5 text-xs', isActive ? 'text-accent' : 'text-text-3')
             }
           >
             <Icon className="size-5" />
-            {label}
+            <span className="max-w-full truncate">{short ?? label}</span>
           </NavLink>
         ))}
       </nav>

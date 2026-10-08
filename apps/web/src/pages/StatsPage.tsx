@@ -10,8 +10,7 @@ import { useAction } from '../lib/feedback';
 import { useLive } from '../lib/live';
 import { fileLabel, formatDuration, type Tone } from '../lib/format';
 import { formatHours, formatMoney, formatWeight } from '../lib/stats';
-import { SpoolStock } from '../components/spools/SpoolStock';
-import { Badge, Button, Card, Spinner } from '../components/ui';
+import { Badge, Button, Card, Segmented, Spinner, Tile } from '../components/ui';
 import { ColumnChart, type Column } from '../components/stats/ColumnChart';
 
 const METRICS = {
@@ -153,39 +152,8 @@ export function StatsPage() {
         </div>
       )}
 
-      <SpoolStock editable={isAdmin} />
-
       <RecentPrints printerId={printerId} />
     </div>
-  );
-}
-
-function Segmented<K extends string>({ value, onChange, options, label }: { value: K; onChange: (v: K) => void; options: Record<K, string>; label: string }) {
-  return (
-    <div role="radiogroup" aria-label={label} className="inline-flex max-w-full overflow-x-auto rounded-lg [scrollbar-width:none] border border-border bg-surface p-0.5">
-      {(Object.keys(options) as K[]).map((k) => (
-        <button
-          key={k}
-          type="button"
-          role="radio"
-          aria-checked={value === k}
-          onClick={() => onChange(k)}
-          className={clsx('min-h-8 whitespace-nowrap rounded-md px-2 text-sm sm:px-3', value === k ? 'bg-surface-2 font-medium text-text' : 'text-text-2 hover:text-text')}
-        >
-          {options[k]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <Card className="min-w-0 px-4 py-3">
-      <div className="text-xs text-text-3">{label}</div>
-      <div className="truncate text-2xl font-semibold">{value}</div>
-      {sub && <div className="text-xs text-text-3">{sub}</div>}
-    </Card>
   );
 }
 

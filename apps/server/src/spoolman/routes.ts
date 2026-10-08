@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { createSpoolSchema, setSpoolSchema, spoolmanUrlSchema, updateSpoolSchema } from '@printhub/shared';
+import { createSpoolSchema, newFilamentSchema, setSpoolSchema, spoolmanUrlSchema, updateSpoolSchema } from '@printhub/shared';
 import type { AuthService } from '../auth/service.js';
 import { requestMeta } from '../auth/plugin.js';
 import type { PrinterManager } from '../printers/manager.js';
@@ -51,6 +51,25 @@ export async function spoolmanRoutes(
     admin.patch('/spoolman/spools/:id', async (req) => {
       const { id } = idParams.parse(req.params);
       return spoolman.updateSpool(id, updateSpoolSchema.parse(req.body));
+    });
+
+    admin.delete('/spoolman/spools/:id', async (req) => {
+      const { id } = idParams.parse(req.params);
+      await spoolman.deleteSpool(id);
+      auth.audit(req.auth!.user.id, 'spoolman.spool_delete', `#${id}`, requestMeta(req));
+      return { ok: true };
+    });
+
+    admin.patch('/spoolman/filaments/:id', async (req) => {
+      const { id } = idParams.parse(req.params);
+      return spoolman.updateFilament(id, newFilamentSchema.parse(req.body));
+    });
+
+    admin.delete('/spoolman/filaments/:id', async (req) => {
+      const { id } = idParams.parse(req.params);
+      await spoolman.deleteFilament(id);
+      auth.audit(req.auth!.user.id, 'spoolman.filament_delete', `#${id}`, requestMeta(req));
+      return { ok: true };
     });
 
     admin.put('/printers/:id/spool', async (req) => {
