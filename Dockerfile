@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- App build (Node/pnpm) ---------------------------------------------------
-FROM node:22-bookworm-slim AS build
+FROM node:24.22.3-bookworm-slim AS build
 RUN corepack enable && apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .npmrc ./
@@ -57,7 +57,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       ca-certificates libgtk-3-0t64 libwebkit2gtk-4.1-0 libgl1 libegl1 libglu1-mesa libosmesa6 \
       libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libsecret-1-0 libsm6 libice6 libmspack0t64 \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:24.22.3-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=orca /opt/orca /opt/orca
 ENV NODE_ENV=production \
     APP_VERSION=$APP_VERSION \

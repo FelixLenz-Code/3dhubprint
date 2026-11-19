@@ -11,6 +11,10 @@
     "test": "pnpm -r test"
   },
   "pnpm": {
+    "overrides": {
+      "tsup>esbuild": "^0.28.1",
+      "workbox-build>glob": "^14.0.6"
+    },
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "esbuild",
